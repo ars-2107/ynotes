@@ -1,0 +1,30 @@
+name: Release
+
+# INTENTIONALLY INERT.
+#
+# Releases are handled by cargo-dist ("dist"). Its release workflow is
+# GENERATED from `[package.metadata.dist]` in Cargo.toml — it is not
+# hand-written, and `dist` will overwrite hand edits. Once a Rust toolchain is
+# available:
+#
+#   cargo install cargo-dist     # provides the `dist` binary
+#   dist init                    # regenerates Cargo.toml metadata + THIS file
+#   git add Cargo.toml .github/workflows/release.yml
+#
+# `dist init` replaces this file with the canonical pipeline (checksummed,
+# multi-target, with shell/powershell installers) for the targets configured in
+# Cargo.toml. Until then this placeholder runs nothing, so a stray tag push is
+# a deliberate no-op rather than a half-built release.
+
+on:
+  workflow_dispatch:
+
+# Inert workflow — grant nothing until `dist init` generates the real one.
+permissions: {}
+
+jobs:
+  not-configured:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Run 'dist init' to generate the real release workflow."

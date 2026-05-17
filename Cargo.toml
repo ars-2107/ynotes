@@ -1,0 +1,104 @@
+# ynotes — a single crate with two faces.
+#
+#   src/lib.rs   the engine. Every behaviour lives here. This is the library.
+#   src/main.rs  a thin binary that parses arguments and renders the engine's
+#                results. Its modules (cli, commands, logging, command_error)
+#                are compiled into the binary only — they are NOT part of the
+#                library, so a CLI concern cannot leak into the engine.
+#
+# This is bat's model (one crate, lib + bin). When a second front-end (an MCP
+# server) becomes real, `src/lib.rs` and its modules lift out into their own
+# crate with no logic changes — the boundary already exists. See AGENTS.md.
+
+[package]
+name = "ynotes"
+version = "0.1.0"
+edition = "2024"
+# MSRV. Edition 2024 stabilised in 1.85, so that is the floor. Keep in sync
+# with rust-toolchain.toml, clippy.toml and the `msrv` CI job.
+rust-version = "1.85"
+description = "Store code context that survives edits, and return only the context a query overlaps."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ars-2107/ynotes"
+homepage = "https://github.com/ars-2107/ynotes"
+authors = ["ynotes contributors"]
+keywords = ["cli", "context", "annotations", "agents", "code"]
+categories = ["command-line-utilities", "development-tools"]
+default-run = "ynotes"
+
+[lib]
+name = "ynotes"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ynotes"
+path = "src/main.rs"
+
+# Lints. CI runs clippy with `-D warnings`, so every "warn" is a hard gate in
+# CI while staying non-blocking for local iteration.
+[lints.rust]
+# ynotes needs no `unsafe`. Forbid (not deny) so it cannot be re-enabled with
+# a local `#[allow]`.
+unsafe_code = "forbid"
+# Documentation is part of the public API — see the comment doctrine in
+# AGENTS.md.
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+let_underscore_drop = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that are more noise than signal for a CLI of this size.
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+# Black-box testing of the built binary (bat / jujutsu style).
+assert_cmd = "2"
+predicates = "3"
+# Snapshot testing. A natural fit for ynotes's structured drift/diff output:
+# assert on rendered text, review changes as diffs.
+insta = "1"
+
+# --- Build profiles -------------------------------------------------------------
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "debuginfo"
+
+# Optimise dependencies even in debug builds: a one-off cost that buys much
+# faster test/debug runs (jujutsu uses this).
+[profile.dev.package."*"]
+opt-level = 3
+codegen-units = 1
+debug = "line-tables-only"
+
+# Ephemeral CI runners gain nothing from debuginfo or incremental artefacts.
+[profile.ci]
+inherits = "dev"
+debug = false
+incremental = false
+
+# cargo-dist owns this block and the release workflow. Regenerate both with
+# `dist init` once a toolchain is available; do not hand-maintain them.
+[package.metadata.dist]
+ci = ["github"]
+installers = ["shell", "powershell"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]

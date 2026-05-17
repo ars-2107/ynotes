@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    # Wait before adopting brand-new releases: a compromised version that is
+    # yanked quickly is then never auto-applied. Supply-chain hardening,
+    # enforced by zizmor's `dependabot-cooldown` audit.
+    cooldown:
+      default-days: 7
+    # Batch low-risk updates into one PR; majors stay separate for review.
+    groups:
+      cargo-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

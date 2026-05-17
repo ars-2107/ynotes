@@ -1,0 +1,9 @@
+# Only stable rustfmt options are set here. Nightly-only options (e.g.
+# `imports_granularity`, `group_imports`) are intentionally omitted: the pinned
+# toolchain is stable, and setting unstable keys would emit warnings on every
+# `cargo fmt` run.
+edition = "2024"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true

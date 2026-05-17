@@ -1,0 +1,15 @@
+# cargo-nextest configuration.
+#
+# nextest is the test runner (faster, clearer output, real per-test isolation).
+# Note: nextest does NOT run doctests — CI and the justfile run
+# `cargo test --doc` separately so the doctest in `version()` is still covered.
+
+[profile.default]
+# Surface a slow test rather than letting it hang a run silently.
+slow-timeout = { period = "30s", terminate-after = 2 }
+
+[profile.ci]
+# In CI, run every test even after a failure so one break doesn't mask others.
+fail-fast = false
+# Retrying is a smell here; a flaky test is a bug to fix, not paper over.
+retries = 0
