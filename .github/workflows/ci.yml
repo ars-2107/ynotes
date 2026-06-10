@@ -131,9 +131,10 @@ jobs:
     # Exercises the real npm distribution: build the host binary, assemble the
     # launcher + its per-platform package, install globally, run it. Catches a
     # regression in `bin/ynotes.js` or the `optionalDependencies` wiring that
-    # unit tests cannot see. The release build is heavy, so this runs on pushes
-    # to main, not on every PR.
-    if: github.event_name != 'pull_request'
+    # unit tests cannot see. Built with the default (debug) profile so it runs
+    # on every PR — the launcher's behaviour and the `optionalDependencies`
+    # filtering are identical between debug and release; only `install-test-musl`
+    # below stays push-only because cross-compiling under musl is the slow part.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -159,11 +160,12 @@ jobs:
         run: |
           set -euo pipefail
           # Build the host binary and drop it into its per-platform package.
-          cargo build --release --bin ynotes
+          # Debug profile: this job tests launcher + packaging, not codegen.
+          cargo build --bin ynotes
           bin=ynotes
           [ "$RUNNER_OS" = Windows ] && bin=ynotes.exe
           mkdir -p "npm/$PKG/bin"
-          cp "target/release/$bin" "npm/$PKG/bin/$bin"
+          cp "target/debug/$bin" "npm/$PKG/bin/$bin"
           node scripts/sync-version.mjs
           # Pack the launcher + this platform package, install both globally,
           # and confirm the shim resolves and runs the binary off PATH.

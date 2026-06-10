@@ -5,14 +5,14 @@ before changing code — it encodes decisions that are expensive to reverse.
 
 ## What ynotes is
 
-A git-like CLI that stores context for regions of code and returns, on demand,
+A CLI that stores context for regions of code and returns, on demand,
 only the context overlapping a queried line range. Not a comment system
 (context costs no tokens until asked for) and not a notes vault (context is
 anchored to the code and re-anchors when the code moves). The defining hard
 problem — re-anchoring across edits with explicit staleness rather than silent
 loss — is solved by the selector ladder (`anchor`): independent relocation
-rungs whose agreement is the confidence signal, and an unlocatable region
-surfaced `orphaned` rather than dropped.
+rungs whose verdict is an honest `anchored` / `drifted` / `orphaned` status,
+with an unlocatable region surfaced `orphaned` rather than dropped.
 
 ## Commands
 
@@ -30,7 +30,7 @@ merged or committed without it passing.
 
 ## Architecture (and the one rule)
 
-One crate, two faces (bat's model):
+One crate, two faces:
 
 ```
 src/lib.rs          the engine — every behaviour. THIS is the library.
@@ -45,8 +45,8 @@ src/command_error.rs/   reach the engine because the engine never sees them.
 **The rule: behaviour lives in the library (`lib.rs` and the modules it
 declares). Binary-only modules may parse arguments and render results —
 nothing more.** The binary reaches the engine via `use ynotes::…`; the engine
-never references a binary module. One crate is the lean shape Vercel's own CLIs
-use; the library boundary inside it gives separation without the ceremony, at
+never references a binary module. One crate is the lean shape; the library
+boundary inside it gives separation without the ceremony, at
 the cost of being discipline-enforced rather than compiler-enforced.
 
 ### Where new work goes
@@ -62,8 +62,8 @@ the cost of being discipline-enforced rather than compiler-enforced.
 
 ### Why the engine is synchronous
 
-Filesystem reads and content matching are synchronous. The engine stays sync
-(like `jj-lib`); async (`tokio`) enters only at a future network boundary (the
+Filesystem reads and content matching are synchronous. The engine stays sync;
+async (`tokio`) enters only at a future network boundary (the
 MCP crate). Do not pull `tokio` into the library.
 
 ## Error strategy
@@ -72,7 +72,7 @@ MCP crate). Do not pull `tokio` into the library.
   `#[non_exhaustive]`). Variants distinguish what a caller must *react to*.
 - The binary's `command_error` module wraps failures in `CommandError`, whose
   only job is presentational: the user-facing message and the exit code
-  (`2` usage, `1` otherwise). Mirrors jujutsu's `command_error.rs`.
+  (`2` usage, `1` otherwise).
 
 Typed/matchable in the library; presentational/exit-coded in the binary.
 
@@ -133,34 +133,18 @@ of these in the same change — agents must not leave any stale:
 8. **A resolve never writes; only `reanchor` does.** `query`/`list` are pure
    (read-only mounts, concurrent readers, a future read-only MCP server
    depend on it). `reanchor` is the sole resolve-time write path and refuses
-   to refresh anything below high confidence — re-anchoring is irreversible.
+   to refresh an `orphaned` note — re-anchoring is irreversible.
 9. **The crate version in `Cargo.toml` is the single source of truth.**
    `package.json` and every `npm/*/package.json` are generated from it by
    `scripts/sync-version.mjs`; the `version-sync` CI job fails on drift. Never
    hand-edit a version in an npm manifest.
 
-## Reference codebases
-
-`.opensrc/RUST_REFERENCES.md` is the curated index of production Rust CLIs this
-project learns from (ripgrep, gitoxide, jujutsu, bat, opensrc, agent-browser),
-mapping each sub-problem to the specific upstream slice to study. **All of
-`.opensrc/` is local-only and git-ignored** — never commit it.
-
-`opensrc` caches source under `OPENSRC_HOME`. It must point at this project, or
-it silently writes to the global `~/.opensrc` and the manifest paths go stale:
-
-```sh
-export OPENSRC_HOME="$(git rev-parse --show-toplevel)/.opensrc"
-opensrc fetch <owner/repo>             # cache a repo (or crates:<name>)
-rg "pattern" "$(opensrc path <owner/repo>)"   # read cached source in place
-```
-
 ## Releases
 
 The release pipeline is **hand-written** (`.github/workflows/release.yml`) —
-deliberately not cargo-dist. This matches how ripgrep, bat, and agent-browser
-ship, keeps the workflow transparent and `zizmor`-auditable, and avoids
-depending on an external release tool. Do not reintroduce cargo-dist.
+deliberately not cargo-dist. This keeps the workflow transparent and
+`zizmor`-auditable, and avoids depending on an external release tool. Do not
+reintroduce cargo-dist.
 
 **To cut a release:**
 
@@ -189,7 +173,7 @@ the secret `NPM_TOKEN` (the `publish-npm` job is scoped to it).
 **npm distribution shape:** `ynotes` is a thin launcher (`bin/ynotes.js`)
 declaring seven `optionalDependencies` — `ynotes-<platform>` — each carrying
 one prebuilt binary with `os`/`cpu` (and `libc` on the Linux packages) set, so
-npm installs only the matching one (the esbuild/swc model). The launcher
+npm installs only the matching one. The launcher
 detects glibc vs musl, locates that binary, and execs it. The CI `install-test`
 job exercises this end-to-end on Linux/macOS/Windows, and `install-test-musl`
 does the same inside an Alpine container for both musl targets.

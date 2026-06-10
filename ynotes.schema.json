@@ -1,0 +1,478 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ars-2107/ynotes/main/ynotes.schema.json",
+  "title": "ynotes --json output",
+  "description": "The machine-facing contract for every `ynotes <cmd> --json` output (`save`, `query`, `list`, `update`, `delete`, `prune`, `reanchor`, `doctor`). Every shape rides inside the same envelope: `{success: bool, v: int, …}` — `data` on success, `error`+`type` on failure. The envelope is emitted on stdout regardless of exit code, so a JSON consumer never has to branch on `$?` to parse the response. This is a stable, versioned agent contract: `v` is bumped whenever a field changes and mirrored in tests/agent_contract.rs. See AGENTS.md invariant 7.",
+  "oneOf": [
+    { "$ref": "#/$defs/successEnvelope" },
+    { "$ref": "#/$defs/failureEnvelope" }
+  ],
+  "$defs": {
+    "successEnvelope": {
+      "type": "object",
+      "title": "success envelope",
+      "description": "Emitted on a `0` exit. The `data` shape depends on the subcommand; the envelope fields are uniform across all of them.",
+      "additionalProperties": false,
+      "required": ["success", "v", "data"],
+      "properties": {
+        "success": { "const": true },
+        "v": { "$ref": "#/$defs/schemaVersion" },
+        "data": {
+          "oneOf": [
+            { "$ref": "#/$defs/saveData" },
+            { "$ref": "#/$defs/queryData" },
+            { "$ref": "#/$defs/listData" },
+            { "$ref": "#/$defs/updateData" },
+            { "$ref": "#/$defs/deleteData" },
+            { "$ref": "#/$defs/pruneData" },
+            { "$ref": "#/$defs/reanchorData" },
+            { "$ref": "#/$defs/doctorData" }
+          ]
+        }
+      }
+    },
+    "failureEnvelope": {
+      "type": "object",
+      "title": "failure envelope",
+      "description": "Emitted on a `1`/`2` exit for `--json` commands. The diagnostic that would otherwise go to stderr is in-band as `error`; `type` is a stable enum so a consumer can branch programmatically without regex on the message.",
+      "additionalProperties": false,
+      "required": ["success", "v", "error", "type"],
+      "properties": {
+        "success": { "const": false },
+        "v": { "$ref": "#/$defs/schemaVersion" },
+        "error": {
+          "type": "string",
+          "description": "The diagnostic message — the same text that would otherwise appear on stderr."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["usage", "engine", "io", "render"],
+          "description": "Error class. `usage`: bad invocation / bad value (exit 2). `engine`: an engine-level failure (exit 1). `io`: a binary-side I/O failure (exit 1). `render`: serialisation failure (exit 1)."
+        }
+      }
+    },
+    "saveData": {
+      "type": "object",
+      "title": "save --json data",
+      "description": "Payload for `ynotes save --json`: the saved note's identity. The id is a content hash of (target, scope, anchor, body) with no timestamp, so it is deterministic across machines and a retried identical save is a no-op. Note: a subsequent `reanchor` (or `update`) changes the anchor and therefore the id — use (target, scope, body) as the stable lineage when caching a reference.",
+      "additionalProperties": false,
+      "required": ["id", "target", "scope", "range", "created"],
+      "properties": {
+        "id": { "$ref": "#/$defs/noteId" },
+        "target": { "$ref": "#/$defs/target" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "range": {
+          "$ref": "#/$defs/lineRange",
+          "description": "The line range captured at save time. For a file-scoped note this spans the whole file (1..line_count)."
+        },
+        "created": {
+          "type": "boolean",
+          "description": "true when this save created a new note; false when an identical note already existed (idempotent save)."
+        }
+      }
+    },
+    "queryData": {
+      "type": "object",
+      "title": "query --json data",
+      "description": "Payload for `ynotes query --json`: every note this query returns. Anchored, drifted, and orphaned notes share one `notes` array — `status` discriminates. Orphans are always included regardless of the queried interval (the never-drop promise).",
+      "additionalProperties": false,
+      "required": ["query", "notes", "warnings"],
+      "properties": {
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "at"],
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "The file argument as passed on the command line."
+            },
+            "at": {
+              "type": "string",
+              "description": "The location argument: `LINE`, `START:END`, or empty for a whole-file query."
+            }
+          }
+        },
+        "notes": {
+          "type": "array",
+          "description": "Every note this query returns — anchored or drifted matches of the queried interval, plus every orphaned note for the file (always included). Ordered: matches first (anchored/drifted), then orphans. Group by `status` if you want the historical matched-vs-orphaned split.",
+          "items": { "$ref": "#/$defs/note" }
+        },
+        "warnings": {
+          "type": "array",
+          "description": "Non-fatal advisories about this query — for example, that the target file does not exist (almost always a typo). The command still exits 0; the warning is the in-band signal. Always present; empty array when there is nothing to flag.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "listData": {
+      "type": "object",
+      "title": "list --json data",
+      "description": "Payload for `ynotes list --json`: every note in the store with its current anchor status.",
+      "additionalProperties": false,
+      "required": ["notes", "warnings"],
+      "properties": {
+        "notes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/note" }
+        },
+        "warnings": {
+          "type": "array",
+          "description": "Non-fatal advisories — populated when a path filter (`list <file>` or `list <dir>`) matched nothing, distinguishing 'this filter is empty' from 'the store is empty'. With no filter, an empty `notes` array is self-explanatory and `warnings` stays empty. Always present.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "updateData": {
+      "type": "object",
+      "title": "update --json data",
+      "description": "Payload for `ynotes update --json`: the refreshed note's identity, plus the id it supersedes. The new note re-anchors against the current file (same target+scope, range re-resolved through the anchor ladder), so the id changes whenever the body, the file, or the resolved range did.",
+      "additionalProperties": false,
+      "required": ["id", "previous_id", "target", "scope", "range", "created"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/noteId",
+          "description": "The refreshed note's id (content-hashed over the new identity)."
+        },
+        "previous_id": {
+          "$ref": "#/$defs/noteId",
+          "description": "The id of the note this one supersedes. Equal to `id` when the update was a no-op (identical body and unchanged anchor)."
+        },
+        "target": { "$ref": "#/$defs/target" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "range": {
+          "$ref": "#/$defs/lineRange",
+          "description": "The line range the refreshed bundle was captured at — the note's current resolved location."
+        },
+        "created": {
+          "type": "boolean",
+          "description": "true when this update wrote a new record; false when an identical content hash already existed."
+        }
+      }
+    },
+    "deleteData": {
+      "type": "object",
+      "title": "delete --json data",
+      "description": "Payload for `ynotes delete --json`. The three category arrays partition the requested ids — each requested id appears in exactly one of `deleted`, `ambiguous`, `not_found`. Always emitted in full (empty arrays included) so a consumer never has to branch on key presence.",
+      "additionalProperties": false,
+      "required": ["requested", "deleted", "ambiguous", "not_found", "dry_run"],
+      "properties": {
+        "requested": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many ids the caller passed."
+        },
+        "deleted": {
+          "type": "array",
+          "description": "Notes that were removed (or, under `dry_run`, would be).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requested", "id", "target", "scope", "range", "body_excerpt"],
+            "properties": {
+              "requested": {
+                "type": "string",
+                "description": "The id-or-prefix the caller passed."
+              },
+              "id": { "$ref": "#/$defs/noteId" },
+              "target": { "$ref": "#/$defs/target" },
+              "scope": { "$ref": "#/$defs/scope" },
+              "range": { "$ref": "#/$defs/lineRange" },
+              "body_excerpt": {
+                "type": "string",
+                "description": "The first line of the body, truncated at 80 characters with `…`. Useful as a confirmation; not the whole body."
+              }
+            }
+          }
+        },
+        "ambiguous": {
+          "type": "array",
+          "description": "Prefixes that matched more than one note. None of the candidates are deleted (we never silently delete multiple matches for a single requested id).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requested", "candidates"],
+            "properties": {
+              "requested": { "type": "string" },
+              "candidates": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/noteId" }
+              }
+            }
+          }
+        },
+        "not_found": {
+          "type": "array",
+          "description": "Prefixes that matched no note in the store.",
+          "items": { "type": "string" }
+        },
+        "dry_run": {
+          "type": "boolean",
+          "description": "true when invoked with `--dry-run` — nothing was actually removed."
+        }
+      }
+    },
+    "pruneData": {
+      "type": "object",
+      "title": "prune --json data",
+      "description": "Payload for `ynotes prune --json`: orphaned notes that were removed (or, under `dry_run`, would be). Drifted notes are never touched — `reanchor` is for them.",
+      "additionalProperties": false,
+      "required": ["pruned", "kept", "dry_run"],
+      "properties": {
+        "pruned": {
+          "type": "array",
+          "description": "One entry per orphan removed (or that would be removed).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "target", "scope", "last_known", "body_excerpt"],
+            "properties": {
+              "id": { "$ref": "#/$defs/noteId" },
+              "target": { "$ref": "#/$defs/target" },
+              "scope": { "$ref": "#/$defs/scope" },
+              "last_known": {
+                "$ref": "#/$defs/lineRange",
+                "description": "The line range the orphan was anchored at the last time the resolver could locate it."
+              },
+              "body_excerpt": {
+                "type": "string",
+                "description": "First line of the body, truncated at 80 characters with `…`."
+              }
+            }
+          }
+        },
+        "kept": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many non-orphaned notes remain in the store."
+        },
+        "dry_run": {
+          "type": "boolean",
+          "description": "true when invoked with `--dry-run` — nothing was actually removed."
+        }
+      }
+    },
+    "reanchorData": {
+      "type": "object",
+      "title": "reanchor --json data",
+      "description": "Payload for `ynotes reanchor --json`. Reports every note whose selectors were refreshed (`changed`), every note deliberately left untouched with the reason (`skipped`), and how many were already current (`unchanged`). A re-anchored note gets a new id (the id hashes over the refreshed bundle) — `old_id`/`new_id` carry both for lineage tracking. Under `--dry-run` the same shape is emitted with `dry_run: true` and no writes occur.",
+      "additionalProperties": false,
+      "required": ["dry_run", "changed", "skipped", "unchanged"],
+      "properties": {
+        "dry_run": {
+          "type": "boolean",
+          "description": "true when invoked with `--dry-run` — nothing was actually written."
+        },
+        "changed": {
+          "type": "array",
+          "description": "Notes refreshed (or that would be). Each entry's `from` is the prior captured range; `to` is the range the refresher resolved to in the current file.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["target", "old_id", "new_id", "from", "to"],
+            "properties": {
+              "target": { "$ref": "#/$defs/target" },
+              "old_id": { "$ref": "#/$defs/noteId" },
+              "new_id": { "$ref": "#/$defs/noteId" },
+              "from": { "$ref": "#/$defs/lineRange" },
+              "to": { "$ref": "#/$defs/lineRange" }
+            }
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "description": "Notes deliberately left untouched, with the reason. `reason_code` is the stable enum to branch on; `reason` is the human form.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["target", "id", "reason_code", "reason"],
+            "properties": {
+              "target": { "$ref": "#/$defs/target" },
+              "id": { "$ref": "#/$defs/noteId" },
+              "reason_code": {
+                "type": "string",
+                "enum": ["orphaned", "missing-target", "symlink-escape", "other"],
+                "description": "orphaned: no content rung located it — refreshing would weld it to guesswork. missing-target: the target file is not on disk. symlink-escape: the target resolves outside the work tree. other: a reason this contract version does not enumerate."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Free-form human explanation suitable for display."
+              }
+            }
+          }
+        },
+        "unchanged": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many notes were already current (the refreshed bundle hashed to the existing id)."
+        }
+      }
+    },
+    "doctorData": {
+      "type": "object",
+      "title": "doctor --json data",
+      "description": "Payload for `ynotes doctor --json`: the environment ynotes resolves against. Its `platform` and `git` values are machine-dependent, so it is not snapshot-locked.",
+      "additionalProperties": false,
+      "required": ["version", "platform", "git", "store"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "The compiled ynotes version."
+        },
+        "platform": {
+          "type": "string",
+          "description": "Host platform as `OS-ARCH`, e.g. `macos-aarch64`."
+        },
+        "git": {
+          "oneOf": [{ "type": "string" }, { "type": "null" }],
+          "description": "The `git` binary's version, or null when no `git` is on PATH (the git-transport rung is then disabled)."
+        },
+        "store": {
+          "description": "The discovered `.ynotes` store: the string \"none\" when no store was found, otherwise a single-key object.",
+          "oneOf": [
+            { "const": "none" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["found"],
+              "properties": {
+                "found": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path", "notes"],
+                  "properties": {
+                    "path": { "type": "string" },
+                    "notes": { "type": "integer", "minimum": 0 }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["unreadable"],
+              "properties": {
+                "unreadable": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["reason"],
+                  "properties": {
+                    "path": { "type": "string" },
+                    "reason": { "type": "string" }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "note": {
+      "type": "object",
+      "title": "Resolved note",
+      "description": "A stored note resolved against the current file.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "target",
+        "scope",
+        "status",
+        "stale",
+        "resolved_range",
+        "body"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/noteId" },
+        "target": { "$ref": "#/$defs/target" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "status": {
+          "type": "string",
+          "enum": ["anchored", "drifted", "orphaned"],
+          "description": "anchored: located and intact. drifted: located, but moved or edited. orphaned: could not be located."
+        },
+        "stale": {
+          "type": "boolean",
+          "description": "Agent convenience: false only for an anchored note; true for drifted or orphaned. A pure function of status, provided so an agent can branch on one boolean."
+        },
+        "resolved_range": {
+          "description": "Where the note resolved to in the current file, or null for an orphan.",
+          "oneOf": [
+            { "$ref": "#/$defs/lineRange" },
+            { "type": "null" }
+          ]
+        },
+        "previous_range": {
+          "$ref": "#/$defs/lineRange",
+          "description": "Present only for a drifted or orphaned note: the range it occupied before it moved or was lost."
+        },
+        "body": {
+          "type": "string",
+          "description": "The note's context text."
+        },
+        "rungs": {
+          "type": "array",
+          "description": "Present only with --explain: each selector-ladder rung's outcome (the agreement vector).",
+          "items": { "$ref": "#/$defs/rung" }
+        }
+      }
+    },
+    "rung": {
+      "type": "object",
+      "title": "Rung outcome",
+      "description": "One selector-ladder rung's contribution to a resolution. Scores are each rung's self-assessment in [0, 100]; see the README's `--explain` section for the scoring scale.",
+      "additionalProperties": false,
+      "required": ["rung", "result"],
+      "properties": {
+        "rung": {
+          "type": "string",
+          "enum": ["git", "quote", "structural", "fuzzy", "position"],
+          "description": "Which rung: git transport (R1), exact quote (R2), fuzzy alignment (R3), tree-sitter structure (R4), saved position (R5)."
+        },
+        "result": {
+          "type": "string",
+          "enum": ["hit", "miss", "skipped"],
+          "description": "hit: located the region. miss: ran but found nothing. skipped: could not run (e.g. not a git repo) and is not held against the result."
+        },
+        "range": {
+          "$ref": "#/$defs/lineRange",
+          "description": "Present only on a hit: where this rung believes the region now is."
+        },
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Present only on a hit: the rung's own confidence in its range. Scale per rung — git: 100 unchanged / 90 moved-untouched / 70 moved-touched; quote: 95 unique / 90 disambiguated by context / 55 ambiguous; structural: 55–95 (95 = identical fingerprint); fuzzy: 45–80 (capped below 90 — fuzzy alone never anchors); position: 20 in-range / 10 clamped (diagnostic only, never consulted by the verdict)."
+        }
+      }
+    },
+    "noteId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Content-addressed note id: the SHA-256, hex-encoded, of (target, scope, anchor, body). Deterministic — no timestamp or randomness. **Rotates on reanchor and update**: refreshing the anchor or replacing the body changes the hash inputs and so changes the id. To cache a stable handle to a note across reanchors, use the (target, scope, body) tuple rather than the id; `created_at` is preserved across reanchor and is exposed by `list --json` in a future schema version."
+    },
+    "target": {
+      "type": "string",
+      "description": "The note's target file, relative to the store's work tree, with forward slashes."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["range", "file"],
+      "description": "What the note is attached to: a contiguous line range, or the whole file. A single-line note is `range` with `range[0] == range[1]`. (v3 collapsed the v2 `line` variant into `range` so consumers handle one representation; the internal note-id hash still distinguishes intent so existing ids stay valid.)"
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "const": 5,
+      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
+    },
+    "lineRange": {
+      "type": "array",
+      "description": "An inclusive line range [start, end], 1-based.",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "minItems": 2,
+      "maxItems": 2
+    }
+  }
+}

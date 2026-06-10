@@ -11,7 +11,107 @@ explicitly here.
 
 ### Added
 
-- Initial single-crate scaffold (`bat` model): `src/lib.rs` engine + thin
+- `ynotes reanchor --json` — machine-readable refresh report. Mirrors the
+  text report (`changed[]`, `skipped[]`, `unchanged`) inside the agent
+  envelope; each skipped entry carries a stable `reason_code` enum
+  (`orphaned` / `missing-target` / `symlink-escape`) so a consumer can
+  branch without parsing prose. Lets a script run a dry-run, review, and
+  apply loop without regex on the text form.
+
+### Fixed
+
+- `list` and `query` text now render the note's scope alongside its range
+  (`x.rs file:1:3` vs `x.rs range:1:3`), matching the shape `save` and
+  `delete` already use. Previously a file-scoped note over a 3-line file and
+  a range-scoped note over its full 1:3 span rendered identically — only
+  `--json`'s `scope` field disambiguated, leaving the human form ambiguous.
+- Structural rung (R4) `capture` no longer silently drops the rung when the
+  user's saved range includes a trailing blank row after the function it
+  encloses. The blank row is a sibling of the function in the AST, so the
+  smallest *named* node covering the original region was the unnamed root
+  and `smallest_named_containing` returned `None`. A natural human selection
+  ("the whole block, including the gap before the next one") therefore
+  stripped structural permanently from the note's bundle. `capture` now
+  trims whitespace-only rows off both ends of the region for the AST search
+  only; `rel_start`/`rel_end` stay derived from the user's literal selection
+  so the trailing blank is reproduced when the construct moves.
+- Structural rung (R4) now treats `impl T` and `impl Trait for T` as named
+  path anchors. tree-sitter-rust binds the impl's identity to its `type` and
+  `trait` fields rather than `name`, so the previous `node_name` check
+  dropped the impl ancestor from every method's path. Two same-named methods
+  on different types — `impl A { fn foo() {} }` and `impl B { fn foo() {} }`
+  — shared the path `[function_item: foo]`, so the rung could vote for the
+  wrong target. The cluster-and-dissent resolver caught this as an `orphan`
+  rather than mis-anchoring, but R4 was contributing noise instead of
+  signal for every Rust impl method. The fallback synthesises a
+  `Trait for Type` (or bare `Type`) name from the existing fields, so
+  `PathStep` stays flat and the `--json` schema is unchanged.
+- `Store::relativize` (and therefore the id of every saved note) now
+  canonicalises both sides before comparison. Previously, two spellings
+  of the same physical file produced different note ids — `sub/file.txt`
+  and `sub/../sub/file.txt` hashed to distinct ids and surfaced as
+  duplicate notes; on macOS, an absolute `/tmp/...` input was rejected as
+  outside a `/private/tmp/...` work tree because `/tmp` is a symlink to
+  `/private/tmp`. `..` segments and symlinked roots now collapse to the
+  same target string, so the content-addressed id (invariant #6) holds
+  across spellings. Paths whose deepest ancestor does not exist (a
+  `query`/`delete`/`list` against a removed file) still relativize via a
+  lexical fallback.
+- `Error::Io` display now special-cases `NotFound` (`` `<path>` does not
+  exist (check the path) ``) and includes the underlying OS error for
+  other I/O kinds. Previously the message was a context-free `i/o error
+  at <path>`; the doc comment had always promised the OS error would
+  surface alongside the path but the format string never emitted it. The
+  query path's missing-file message and the save path's missing-file
+  message now read the same way.
+- `ynotes query` text-mode advisories now prefix with `warning:` (e.g.
+  `ynotes: warning: <path> does not exist (and has no notes) — check the
+  path`) so the exit-0 advisory is visually distinct from the exit-1
+  `ynotes: <error>` line `main` prints. The JSON path already separated
+  these via `warnings[]`.
+- The symlink-escape guard on `save`/`update` no longer blames a symlink
+  when none is involved. Previously any path whose canonical form sat
+  outside the work tree — an absolute outside path like `/etc/hosts`, a
+  character device like `/dev/null` — was rejected with
+  "(symlink target escapes the work tree)" even though the trigger had
+  no symlink. The guard now restricts itself to paths whose own
+  `symlink_metadata` reports a symlink; non-symlink outside paths fall
+  through to `Store::relativize`'s existing `OutsideStore` ("is outside
+  the ynotes store at `<root>`"). The honest symlink case keeps the
+  symlink-specific wording and also names the resolved target
+  (`` `<path>` is a symlink whose target escapes the work tree at
+  `<root>` (resolves to `<resolved>`) ``). Exit code (`2`, usage) and
+  the safety guarantee itself are unchanged.
+
+### Added
+
+- `ynotes delete <id>...` — remove one or more notes from the store, by full
+  id or any unambiguous hex prefix of at least 4 characters. Multi-id is
+  atomic per-id: successful deletions
+  still happen even when other ids in the same call are ambiguous or not
+  found, and the process exits `1` only if anything failed. `--dry-run`
+  reports what would be removed without writing. `--json` returns a
+  partitioned report (`deleted` / `ambiguous` / `not_found`).
+- `ynotes update <id> [-m <body>] [--json]` — replace an existing note's
+  body in place. The note's target file and scope are reused; the line
+  range is *re-resolved* through the anchor ladder so an `update` on a
+  drifted note anchors against where the code is now. The new note
+  supersedes the old (its content-hash id is retired) and `created_at` is
+  preserved. Identification accepts the same hex-prefix selector as
+  `delete`. The body may come from `-m` or stdin (same trim semantics as
+  `save`). An identical-body update is a no-op (`id == previous_id`,
+  `created: false`).
+- `ynotes prune [--dry-run] [--json]` — remove every orphaned note in one
+  pass. Drifted notes are never touched (`reanchor` is for them); the cleanup
+  is deliberate — ynotes never auto-prunes — because an orphan may be
+  historically valuable or its target temporarily missing.
+- `Store::find_by_id_prefix` — engine API exposed for the new id-based
+  selectors; returns every match, the count-handling lives in the binary
+  (matches/none/many become the right diagnostic per command).
+- `Note::with_bundle_and_body` — builder that supersedes a note with a new
+  body *and* a refreshed bundle in one step, computing the content-addressed
+  id exactly once over the final identity tuple. Used by `update`.
+- Initial single-crate scaffold: `src/lib.rs` engine + thin
   `src/main.rs` binary, with a library boundary so the engine can later be
   extracted into its own crate without a rewrite.
 - CLI surface with `doctor` and `completions` subcommands, structured exit
@@ -33,10 +133,10 @@ explicitly here.
   `git` binary — no `gix`/`git2` dependency — and translates a saved range
   through the commit→work-tree diff, with rename detection), R2 exact-quote
   relocation (prefix/suffix disambiguation), and R5 position as a weak
-  tie-breaker. Outcomes are clustered and combined into an explicit
-  `anchored` / `drifted` / `orphaned` status with a 0–100 confidence;
-  position-only evidence never anchors a note, and an unlocatable note is
-  surfaced orphaned, never dropped.
+  tie-breaker. The content rungs (exact quote, fuzzy) decide an explicit
+  `anchored` / `drifted` / `orphaned` status; git and position corroborate
+  but never anchor a note alone, and an unlocatable note is surfaced
+  orphaned, never dropped.
 - `ynotes save <file> [LINE|START:END] -m <msg>` — capture a note; the
   location form sets the scope (file / line / range); the body may come from
   stdin.
@@ -48,16 +148,17 @@ explicitly here.
   hand-rolled line-LCS similarity (no diff-crate dependency), with a
   conservative acceptance threshold so a genuinely different block honestly
   orphans rather than false-matching. A single-line region uses a bounded
-  character-similarity scan. `anchored` is now reserved for a *located and
-  intact* region (exact-quote or clean git transport, unmoved); an edited or
-  moved region is `drifted`, even when its line numbers are unchanged.
+  character-similarity scan. `anchored` is reserved for a *located and
+  intact* region — exact text present and unmoved, or an identical structural
+  fingerprint; an edited or moved region is `drifted`, even when its line
+  numbers are unchanged.
 - Agentic hardening: note ids are content-addressed over
   `(target, scope, anchor, body)` with no timestamp, so `save` is idempotent
   (a retried identical save is a no-op returning the same id with
   `"created": false`; editing the body supersedes with a new note) and ids
   are deterministic across machines. `ynotes save --json` emits a capturable
   `{id,target,scope,range,created}` record; `query --json` gains a `stale`
-  convenience boolean alongside `status`/`confidence`. The `--json` schema is
+  convenience boolean alongside `status`. The `--json` schema is
   versioned and snapshot-tested as a stable agent contract.
 - R4 structural anchoring (tree-sitter, always on, broad grammar set: Rust,
   JS/TS/TSX, Python, Go, Java, C/C++, Ruby, Bash, JSON, HTML, CSS — all
@@ -72,7 +173,7 @@ explicitly here.
   anchor status (read-only inventory; each target read once).
 - `ynotes reanchor [--dry-run]` — the deliberate, auditable pass that
   refreshes selectors for high-confidence notes so future queries anchor
-  from current code, not ever-staler originals (ynotes's `git gc`). Reads
+  from current code, not ever-staler originals. Reads
   never write; this does. Only notes that resolve at confidence ≥ 90 are
   refreshed (idempotent, supersede semantics preserving `created_at`);
   orphaned and low-confidence notes are left untouched and reported for a
@@ -90,6 +191,10 @@ explicitly here.
   called out explicitly, since it disables the git-transport rung) and the
   discovered `.ynotes` store with its note count — not only the ynotes
   version and platform.
+- `ynotes doctor --json` emits that same environment report — ynotes version,
+  platform, `git` availability, and the discovered store path with its note
+  count — as a single machine-readable JSON object, for agents and scripts
+  that want a health check they can parse. The human text output is unchanged.
 - `ynotes.schema.json` — a published JSON Schema (draft 2020-12) for the
   `save`/`query`/`list` `--json` output. The snapshot test
   (`tests/agent_contract.rs`) still locks the contract; the schema makes it
@@ -104,7 +209,7 @@ explicitly here.
 - npm distribution: `ynotes` is a thin launcher (`bin/ynotes.js`) that declares
   seven `optionalDependencies` — `ynotes-<platform>` — each carrying one
   prebuilt binary tagged with `os`/`cpu`/`libc`, so an install pulls only the
-  binary it needs (the esbuild model). The launcher detects glibc vs musl, so
+  binary it needs. The launcher detects glibc vs musl, so
   Alpine and other musl distros are supported. `scripts/sync-version.mjs` keeps
   `package.json` and `npm/*/package.json` in lockstep with the crate version.
 - CI gains a `docs` job (broken intra-doc links now fail the build, enforcing
@@ -112,5 +217,202 @@ explicitly here.
   build, pack, and `npm install` the CLI to exercise the real distribution
   path: `install-test` on Linux/macOS/Windows, and `install-test-musl` inside
   an Alpine container for both musl targets.
+
+### Changed
+
+- **Breaking (agent contract):** the `--json` schema is bumped to `"v": 5`.
+  `query --json` now returns one `notes: []` array instead of the v=4
+  `{matched: [], orphaned: []}` split — every resolved note rides in one
+  array with `status` ("anchored" / "drifted" / "orphaned") discriminating.
+  Orphans are still always returned (the never-drop promise, invariant
+  #4); group by `status == "orphaned"` if you want the historical
+  matched-vs-orphaned partition. Aligns `query` with `list` so consumers
+  handle one shape across both. The new `update`, `delete`, and `prune`
+  subcommands' payloads (`updateData`, `deleteData`, `pruneData`) join
+  the contract under the same versioned envelope.
+- **Breaking (UX):** `ynotes init` is now idempotent — a second invocation
+  in a directory that already has a store reports `ynotes store already
+  exists at <path>` on stdout and exits `0`, instead of exiting `2` with
+  a refusal. This follows the "already in the desired state → success"
+  pattern, so an agent that pattern-matches to other Unix CLIs reads the
+  right outcome. The store is still
+  refused — as `Error::Invalid` — when `.ynotes` exists but lacks a `HEAD`
+  sentinel, since adopting an unrelated directory of that name would be
+  unsafe. `Error::StoreExists` is removed from the library `Error` enum
+  (no caller branches on it any more).
+- **Breaking (agent contract):** the `--json` schema is bumped to `"v": 4`.
+  Every payload now rides inside a uniform envelope —
+  `{success: true, v: 4, data: <payload>}` on success;
+  `{success: false, v: 4, error: "<message>", type: "<kind>"}` on
+  failure — and the envelope is emitted on stdout regardless of exit
+  code. A JSON consumer branches on the `success` field instead of
+  checking `$?` before parsing; `type` is a stable enum (`usage`,
+  `engine`, `io`, `render`) so a consumer can react to the error class
+  without regex on the message. The envelope shape is `{success, data}` on
+  success / `{success, error}` on failure. Existing consumers move from
+  `.matched[]` to `.data.matched[]`, etc. — every existing key kept its
+  name; one nesting level is the only change beyond `success`/`v`/`type`.
+- **Breaking (agent contract):** the `--json` schema is bumped to `"v": 3`.
+  - `query --json` and `list --json` gain an always-present `warnings: []`
+    array. `query --json` populates it when the target file is missing
+    (almost always a typo); `list --json` populates it when a path filter
+    matched nothing — distinguishing "this filter is empty" from "the store
+    is empty" without reparsing stderr. With no filter, an empty `notes`
+    array is self-explanatory and `warnings` stays empty. Exit code stays
+    `0`; the warning is the in-band signal.
+  - The `scope` field collapses `"line"` into `"range"`: a single-line note
+    is now `{"scope":"range","range":[n,n]}`. Consumers handle one shape for
+    a contiguous region; intent (was-it-typed-as-a-single-line) is
+    recoverable from `range[0] == range[1]`. The internal `Scope::Line`
+    enum is preserved so existing note ids — content-hashed over
+    `(target, scope, bundle, body)`, invariant #6 — stay valid.
+
+### Fixed
+
+- A path that resolves outside the work tree now consistently exits `2`
+  (usage error) for `save`, `query`, and `list` — matching the existing
+  symlink-escape guard's exit code. Previously the absolute-path form
+  routed through `Error::Invalid` and exited `1` (engine error) while the
+  symlink-escape form exited `2`; same user mistake, two different exit
+  codes. A new typed `Error::OutsideStore { path, store_root }` variant
+  (the engine enum is `#[non_exhaustive]`, so additive) is the single
+  source of classification — the binary's `From<ynotes::Error>` maps it
+  to `CommandError::Usage`. Field-reported by an external review.
+- `Store::save` no longer over-reports `created: true` under contention.
+  The check-then-write TOCTOU window let two concurrent identical saves
+  both see "file absent" and both write, both reporting `created: true`
+  even though only one record physically existed. The persistence step is
+  now `tempfile::NamedTempFile::persist_noclobber` (POSIX `link`+`unlink`,
+  Windows `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`), which is
+  atomic: the loser of a race gets a clean `Ok(false)`. A new integration
+  test runs eight parallel saves of identical content and asserts exactly
+  one `created: true`.
+- The empty-body `save` error names the actual cause rather than the
+  symptom: `"no note body provided — pass \`-m "<text>"\` or pipe text on
+  stdin"`, replacing the prior `"refusing to save an empty note (use -m
+  or pipe text on stdin)"`. A field reviewer mistook the old message for
+  a `-m` + stdin conflict; the new wording forecloses that misreading.
+- `json_envelope::wrap` no longer double-emits when a command body
+  signals a non-zero exit alongside an already-printed *success* envelope
+  (the new `delete` pattern: per-id outcomes ride in the success envelope;
+  the exit code carries "some ids failed"). `Rendered` errors are now
+  passed through unchanged instead of triggering a second `print_error`
+  call — stdout carried two JSON documents back-to-back before the fix.
+- `ynotes save --json` is serialised with `serde_json` rather than string
+  interpolation, so a target path containing a character that JSON escapes
+  (e.g. a quote) can no longer produce malformed output. The `--json` surface
+  is an agent contract and must always parse.
+- A location argument of `0` is rejected as a usage error everywhere. Line
+  numbers are 1-based, so `0:5` and `save … 0` already failed; a bare
+  `query <file> 0` now does too, instead of silently behaving as a
+  whole-file query.
+- A note's target path is derived from the file path's components rather than
+  a blanket `\` → `/` rewrite. A backslash is a path separator only on
+  Windows; on Unix it is an ordinary filename character, so the old rewrite
+  could store a note on `a\b.rs` under the wrong key and leave it permanently
+  orphaned in `list`.
+- `reanchor` against a dirty working tree no longer desyncs the git-transport
+  rung. The git selector now stores the region's range in its baseline
+  commit's own coordinates — captured by translating the working-tree range
+  back through the commit diff — so the `(commit, range)` pair stays
+  internally consistent, and a later `query`, or a later commit of the
+  pending edit, transports it with no offset. Previously a `reanchor` run on
+  an edited-but-uncommitted tree (the documented workflow) baked a permanent
+  line skew, equal to that uncommitted edit, into every refreshed note's git
+  rung; the same flaw affected a `save` against a dirty tree. The `git`
+  selector gains an optional `range` field — a note written before it falls
+  back to the position selector, so existing stores keep loading.
+- A region whose enclosing construct has been deleted now resolves `orphaned`
+  rather than `drifted` at high confidence. Resolution counts only the
+  content rungs (exact quote, structural, fuzzy) as evidence the region still
+  exists: git transporting a deleted range onto the deletion point, and the
+  position rung flooring into a now-shorter file, are no longer mistaken for
+  a relocation. Previously a fully-deleted region was re-pointed onto
+  unrelated code and stamped `confidence: 100`.
+- `query` and `list` text output no longer prints `drifted ⚠ was X` when X is
+  the range the note already resolved to. A content-only drift — an in-place
+  edit, or any note just refreshed by `reanchor` — keeps its saved position,
+  so the `was …` clause now appears only when the region genuinely moved.
+- The re-anchoring combiner no longer lets the `git` and `structural` rungs
+  out-vote the content rungs. Field testing found it false-anchoring a
+  deleted region onto unrelated code (resolving `drifted`) and reporting an
+  edited region as `anchored` — the engine's core guarantee inverted. The
+  combiner is now a decision procedure, not a weighted score: only an exact
+  `quote` match, a `fuzzy` match, or a `structural` match with an identical
+  content fingerprint establishes that a region's code is present; `git` and
+  `position` corroborate but never decide. A region no content rung locates
+  resolves `orphaned`; `anchored` again means located *and* intact.
+- The `structural` rung's fingerprint now includes identifier and literal
+  text, not only node kinds, so a renamed local or a changed literal is
+  visible to it. Previously a structure-preserving edit kept a byte-identical
+  fingerprint and the rung reported the region intact at full score.
+- **Removed** the per-note `confidence` integer from the `save`/`query`/`list`
+  `--json` output; the schema version `v` is now `2`. The combined 0–100
+  score was fabricated — at times higher than any rung it was derived from —
+  and an agent branches on the `status` category, not a numeric threshold.
+  `status` and the derived `stale` boolean are the trust signal; per-rung
+  scores remain under `query --explain`. `reanchor` correspondingly refreshes
+  any non-orphaned note rather than gating on a confidence threshold.
+- The fuzzy rung (R3) now recognises a region that was edited in place — for
+  example with every local variable renamed — instead of orphaning it. Lines
+  are matched by character similarity rather than exact equality, and a region
+  with no exact-surviving line is relocated by scoring the saved block against
+  a window of offsets around its last known position. Such a region is now
+  reported `drifted`, not `orphaned`.
+- `save` no longer attaches a git selector for a file that is not tracked in
+  `HEAD`. An untracked file has no baseline commit, so the git-transport rung
+  could previously report a spurious result for it; such a file now captures
+  `git: None`, leaving R1 to report `skipped` while the content rungs carry
+  resolution.
+- `save` now genuinely supersedes. Re-saving a note at the same location
+  (same target, scope, and original line range) with an edited body retires
+  the earlier note instead of leaving both live, so `query` no longer returns
+  a stale and a current copy of the same context. The new note is written
+  before the old one is removed, so a crash mid-operation cannot lose a note;
+  an identical re-save remains a pure no-op.
+- `save` reading the body from stdin no longer keeps the pipe's trailing
+  newline(s): a piped body and a `-m` body now store identical text, and so
+  share a content-addressed id for identical content.
+- `save <file> <line-past-end-of-file>` now exits `2` (a usage error), to
+  match `save <file> 0`; previously a beyond-EOF range exited `1` as a
+  runtime error.
+- `reanchor` no longer prints a self-contradictory `X:Y -> X:Y` line for a
+  note whose selectors were refreshed but whose line range did not move; it
+  now reads `<target> X:Y (selectors updated, range unchanged)`.
+- `query` on a path that does not exist and has no notes now reports that the
+  file does not exist, on stderr, instead of the generic "no notes for that
+  query" — so a mistyped path fails loudly. The exit code stays `0`: a query
+  that finds nothing is not an error.
+- The resolver no longer re-anchors a note onto a same-shaped sibling when
+  the original region was deleted. Field testing found a note saved on one
+  function re-pointing onto a sibling after the former was removed — both
+  shared their scaffolding lines, so the fuzzy rung's LCS landed on the
+  sibling's body, no other rung agreed, and `reanchor` then welded the note
+  there at `status: anchored`. The combiner now treats a fuzzy hit as
+  sufficient only when (a) fuzzy resolved to the *exact* saved range — its
+  position-window scoring picked the saved offset over every alternative,
+  the rung's own evidence that the region did not move — or (b) git
+  transport or the structural rung (at any score) independently points at
+  the same range. Otherwise the note resolves `orphaned` and `reanchor`
+  leaves it alone for a human; the position rung is not consulted here,
+  since its range is *the saved range*, and treating that overlap as
+  corroboration is circular. Invariant #4 over a confidently-wrong
+  attribution.
+- `save` and `reanchor` now refuse a target whose canonical path lies
+  outside the work tree. The lexical `relativize` (which must work for files
+  that do not yet exist) let a symlink like `inside.lnk -> /etc/passwd`
+  through at save time, and a real file whose path was later swapped for
+  such a symlink would have been picked up at the next `reanchor`. In
+  either case the external content would have been hashed into a
+  selector bundle and — if `.ynotes` is committed — leaked downstream.
+  Both commands now canonicalise the target and the work tree and reject
+  the escape (`save` exits with a usage error; `reanchor` skips the note
+  with a named reason). Intra-repo symlinks (target resolves back into the
+  work tree) are unaffected.
+- `list <dir>` now filters by prefix instead of silently reporting "no notes
+  in this store" while the store has notes elsewhere. The boundary uses a
+  trailing `/`, so `list sa/` does not match `saas/...`. The empty-result
+  message distinguishes "no notes under `<dir>`" from "no notes in this
+  store".
 
 [Unreleased]: https://github.com/ars-2107/ynotes/commits/main

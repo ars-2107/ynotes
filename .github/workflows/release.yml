@@ -1,8 +1,7 @@
 name: Release
 
 # Hand-written release pipeline (see AGENTS.md "Releases"). cargo-dist is
-# deliberately not used — this mirrors how ripgrep, bat, and agent-browser
-# release: a transparent, zizmor-auditable workflow.
+# deliberately not used — the goal is a transparent, zizmor-auditable workflow.
 #
 # Trigger: push a `vX.Y.Z` tag whose version equals the `[package]` version in
 # Cargo.toml. The pipeline then builds every target, creates the GitHub

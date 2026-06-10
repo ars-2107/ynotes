@@ -10,7 +10,7 @@ for the design.
 
 ## What this is
 
-ynotes is a git-like CLI for attaching context to regions of code. Unlike
+ynotes is a CLI for attaching context to regions of code. Unlike
 comments, the context is not carried inside the file (so it costs an agent no
 tokens until requested); unlike a notes vault, it is anchored to the code and
 re-anchors itself when the code moves. Retrieval is range-based: ask for any
@@ -19,13 +19,13 @@ line range and ynotes returns the context overlapping it.
 The hard problem — re-anchoring context across edits without it going silently
 stale — is the heart of ynotes. It is solved by a ladder of independent
 relocation signals (git-history transport, tree-sitter structural identity,
-exact-quote and fuzzy text matching) whose *agreement* is the confidence
-score. A region that cannot be relocated is surfaced `orphaned` — never
-silently dropped.
+exact-quote and fuzzy text matching): the content signals decide whether a
+region is still present and intact, and a region that cannot be located is
+surfaced `orphaned` — never silently dropped.
 
 ## Layout
 
-One crate, two faces (the `bat` model):
+One crate, two faces:
 
 ```
 src/lib.rs        the engine — all behaviour lives here (the library)
@@ -33,8 +33,8 @@ src/main.rs       a thin binary: parse args, dispatch, exit code
 src/cli.rs …      binary-only modules (not part of the library)
 ```
 
-A library boundary *inside* one crate keeps the start lean (the shape Vercel's
-own Rust CLIs use) while making the eventual extraction into a `ynotes-core`
+A library boundary *inside* one crate keeps the start lean while making the
+eventual extraction into a `ynotes-core`
 crate — the day an MCP server needs the engine too — a mechanical move rather
 than a rewrite. Full rationale in [`AGENTS.md`](AGENTS.md).
 
@@ -61,6 +61,7 @@ Requires a Rust toolchain (see `rust-toolchain.toml`; MSRV 1.85).
 
 ```sh
 cargo run --bin ynotes -- doctor
+cargo run --bin ynotes -- doctor --json              # machine-readable health check
 cargo run --bin ynotes -- completions zsh
 cargo run --bin ynotes -- init                       # create a .ynotes store
 cargo run --bin ynotes -- save src/lib.rs 40:78 -m "why this matters"
@@ -69,7 +70,12 @@ cargo run --bin ynotes -- query src/lib.rs --json    # machine-readable
 cargo run --bin ynotes -- query src/lib.rs 50 --explain  # show every rung
 cargo run --bin ynotes -- list                       # all notes + status
 cargo run --bin ynotes -- reanchor --dry-run         # preview a refresh
-cargo run --bin ynotes -- reanchor                   # persist confident re-anchors
+cargo run --bin ynotes -- reanchor                   # apply re-anchors
+cargo run --bin ynotes -- reanchor --json            # machine-readable refresh report
+cargo run --bin ynotes -- update abc1234 -m "new body" # replace a note's body in place
+cargo run --bin ynotes -- delete abc1234 def5678     # remove notes by id / hex prefix
+cargo run --bin ynotes -- prune --dry-run            # preview orphan cleanup
+cargo run --bin ynotes -- prune                      # remove every orphaned note
 ```
 
 A saved note is not pinned to line 40:78. When the file is edited, `query`
@@ -84,34 +90,112 @@ dropped).
 
 ynotes is built to be driven by an LLM coding agent, not just a human.
 
-- **Always use `--json`.** `save`, `query`, and `list` accept it; the schema
-  is versioned (`"v"` on the `query`/`list` shapes), snapshot-locked, and
-  published as [`ynotes.schema.json`](ynotes.schema.json) (JSON Schema draft
-  2020-12), so it will not silently change.
+### When to reach for it
+
+ynotes pays off on **repeat visits** to a piece of code. Use it when:
+
+- You're leaving breadcrumbs for an agent (or human) on a later task — a
+  hidden invariant, a non-obvious failure mode, the *why* a piece of code
+  looks redundant. The note costs no tokens until something queries the
+  range.
+- Multiple agents may work in the same area and benefit from each other's
+  findings — the store is the durable communication channel.
+- You're about to delete or rewrite something whose history you want
+  recoverable from inside the codebase (without `git log`-spelunking).
+
+Skip it when:
+
+- The task is a one-shot read whose output (a PR, a summary, an explanation)
+  is the durable artefact. Inline `path:line` citations in the response are
+  the right answer there.
+- Nobody — agent or human — will query the same code again soon.
+
+The selection rule: *would anything change for me if I came back to this
+file in a week?* If yes, leave a note. If no, skip.
+
+### How to drive it
+
+- **Always use `--json`.** Every JSON output rides inside the same envelope —
+  `{success: true, v: 5, data: …}` on success, `{success: false, v: 5,
+  error: …, type: …}` on failure — so a consumer always parses one shape
+  and branches on `success`. The schema is versioned, snapshot-locked, and
+  published as [`ynotes.schema.json`](ynotes.schema.json) (JSON Schema
+  draft 2020-12), so it will not silently change.
 - **`save` is idempotent.** A note's id is a content hash of
   `(target, scope, anchor, body)` — no timestamp. Re-running an identical
   `save` returns the same id with `"created": false` instead of duplicating,
-  so retrying a tool call is safe. Editing the body makes a *new* note
-  (supersede semantics).
-- **Branch on `stale`.** Each queried note carries `status`
-  (`anchored`/`drifted`/`orphaned`), `confidence` (0–100), and a convenience
-  `stale` boolean. Suggested policy:
+  so retrying a tool call is safe. Editing the body makes a *new* note that
+  supersedes the old — the earlier note at that location is retired, not left
+  beside it.
+- **Note ids rotate on `reanchor` and `update`.** The id is content-hashed
+  over `(target, scope, bundle, body)`, so refreshing the anchor or replacing
+  the body changes the id. To cache a stable handle to a note across
+  reanchors, use the `(target, scope, body)` tuple — not the id.
+- **Branch on `status`.** Each queried note carries `status` —
+  `anchored`, `drifted`, or `orphaned` — and a convenience `stale` boolean
+  (`false` only for `anchored`). There is no numeric confidence: the category
+  is the signal. Suggested policy:
 
   | observed | meaning | suggested agent action |
   |---|---|---|
-  | `stale: false` | anchored & confident | trust the context as-is |
-  | `status: "drifted"` | found, but code moved/changed | use it, but re-read the lines; consider updating the note |
-  | `status: "orphaned"` | anchor lost | surface to the human / re-`save` against the new code |
+  | `status: "anchored"` | located and intact | trust the context as-is |
+  | `status: "drifted"` | found, but code moved/changed | use it, but re-read the lines; consider `ynotes update <id>` |
+  | `status: "orphaned"` | code gone or rewritten | treat the note as historical; surface to the human / re-`save` |
 
 - **Exit codes:** `0` = success *even if there are no notes or only orphans*
-  (inspect the `matched`/`orphaned` arrays — empty is not an error); `2` =
-  bad invocation; `1` = real failure.
+  (inspect `data.notes[]` — empty is not an error; an orphan-only result is
+  also exit 0); `2` = bad invocation (including a path outside the store);
+  `1` = real failure.
+- **`--json` always writes the envelope to stdout** — including on failure.
+  Branch on the `success` field, not the exit code: a `1`/`2` exit carries
+  a `{success: false, error, type}` envelope (where `type` is one of
+  `usage`, `engine`, `io`, `render`), so the response is parseable in both
+  paths. On a `0` exit, `data.warnings[]` carries non-fatal advisories
+  (e.g. a missing target file: `notes` empty, the path issue in-band).
+- **`query` returns one `notes` array.** In `v=5` (the current contract),
+  `query --json` carries `{query, notes, warnings}` — every resolved note
+  in a single array, with `status` discriminating. Group by
+  `status == "orphaned"` if you want the historical matched-vs-orphaned
+  split; orphans are still always returned (the never-drop promise).
 - **`query` never writes; `reanchor` is the only write-on-resolve path.** An
   agent can `query` freely (idempotent, safe to parallelise). When notes have
   drifted, run `reanchor` (optionally `--dry-run` first) as a deliberate
   maintenance step — it refreshes only high-confidence notes and leaves
   orphans for a human. `query --explain` exposes the per-rung agreement
   vector for debugging an anchor.
+- **`update`, `delete`, `prune` round out the lifecycle.** `update <id>`
+  replaces a note's body in place (re-anchoring against current code).
+  `delete <id>...` removes notes by full id or unambiguous hex prefix
+  (≥4 chars); a prefix that matches multiple notes is refused, never
+  silently fans out. `prune` removes every orphan in one pass (use
+  `--dry-run` first to preview).
+
+### Understanding `--explain` scores
+
+`query --explain` (and the `rungs` field under `--json --explain`) surfaces
+each selector-ladder rung's outcome, including a self-assessed score in
+`[0, 100]`. **There is no combined "confidence" number** — the verdict is
+the categorical `status`. The per-rung scores are diagnostic: useful when
+debugging why a note resolved the way it did. Scale per rung:
+
+| rung | score | what it means |
+|---|---|---|
+| `git` | 100 | the range is unchanged in the working tree |
+| `git` | 90 | git transported the range to a new location, and the touched lines did not overlap it |
+| `git` | 70 | transported, but the moved range was itself touched (refactor inside it) |
+| `quote` | 95 | the exact text occurs once in the file |
+| `quote` | 90 | the exact text occurs multiple times; the surrounding `prefix`/`suffix` lines disambiguated which one |
+| `quote` | 55 | multiple matches, none disambiguated by context — fell back to the occurrence nearest the saved line |
+| `structural` | 95 | tree-sitter found the enclosing construct *and* its content fingerprint (node kinds + identifier/literal text) is identical — intact bar whitespace and comments |
+| `structural` | 55–94 | construct found, fingerprint drifted (linear in similarity 0.5–1.0) |
+| `fuzzy` | 45–80 | line-LCS alignment matched, scaled by similarity above the acceptance threshold. **Capped below 90** — a fuzzy match alone is never `anchored` |
+| `position` | 20 | the saved range still fits the file. **Diagnostic only** — never consulted by the verdict, since it is the saved range itself |
+| `position` | 10 | the file shrank; the saved range was clamped to fit |
+
+A `result: "miss"` means the rung ran and found nothing. `result: "skipped"`
+means the rung could not run — typically `git` when the file is not in a
+repo, or `structural` for an unsupported language — and contributes nothing
+to the verdict, but is not held against it.
 
 With [`just`](https://github.com/casey/just): `just` lists every task;
 `just ci` runs the exact gate CI enforces (format, lint, docs, test, audit,
