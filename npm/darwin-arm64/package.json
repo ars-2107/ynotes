@@ -1,0 +1,13 @@
+{
+  "name": "ynotes-darwin-arm64",
+  "version": "0.1.0",
+  "description": "The ynotes CLI binary for macOS arm64 (Apple Silicon). Installed automatically as an optionalDependency of `ynotes`.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ars-2107/ynotes.git"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin/"]
+}

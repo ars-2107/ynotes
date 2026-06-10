@@ -1,0 +1,29 @@
+{
+  "name": "ynotes",
+  "version": "0.1.0",
+  "description": "Store code context that survives edits, and return only the context a query overlaps.",
+  "keywords": ["cli", "context", "annotations", "agents", "code"],
+  "homepage": "https://github.com/ars-2107/ynotes#readme",
+  "bugs": "https://github.com/ars-2107/ynotes/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ars-2107/ynotes.git"
+  },
+  "license": "MIT OR Apache-2.0",
+  "bin": {
+    "ynotes": "bin/ynotes.js"
+  },
+  "files": ["bin/ynotes.js"],
+  "optionalDependencies": {
+    "ynotes-darwin-arm64": "0.1.0",
+    "ynotes-darwin-x64": "0.1.0",
+    "ynotes-linux-arm64": "0.1.0",
+    "ynotes-linux-musl-arm64": "0.1.0",
+    "ynotes-linux-musl-x64": "0.1.0",
+    "ynotes-linux-x64": "0.1.0",
+    "ynotes-win32-x64": "0.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

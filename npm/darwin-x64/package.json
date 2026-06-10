@@ -1,0 +1,13 @@
+{
+  "name": "ynotes-darwin-x64",
+  "version": "0.1.0",
+  "description": "The ynotes CLI binary for macOS x64. Installed automatically as an optionalDependency of `ynotes`.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ars-2107/ynotes.git"
+  },
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": ["bin/"]
+}
