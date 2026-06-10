@@ -11,7 +11,7 @@
     "successEnvelope": {
       "type": "object",
       "title": "success envelope",
-      "description": "Emitted on a `0` exit. The `data` shape depends on the subcommand; the envelope fields are uniform across all of them.",
+      "description": "Carries a successful result. Emitted on a `0` exit by every command, and also by `delete` on a `1` exit when some requested ids were unresolved (see `deleteData`) — so a success envelope does not by itself imply a `0` exit. The `data` shape depends on the subcommand; the envelope fields are uniform across all of them.",
       "additionalProperties": false,
       "required": ["success", "v", "data"],
       "properties": {
@@ -34,7 +34,7 @@
     "failureEnvelope": {
       "type": "object",
       "title": "failure envelope",
-      "description": "Emitted on a `1`/`2` exit for `--json` commands. The diagnostic that would otherwise go to stderr is in-band as `error`; `type` is a stable enum so a consumer can branch programmatically without regex on the message.",
+      "description": "Emitted when the command itself failed: exit `2` for a usage error, exit `1` for an engine/io/render failure. The converse does not hold — a non-zero exit is not always a failure envelope: `delete` reports unresolved ids inside a *success* envelope and still exits `1` (see `deleteData`). The diagnostic that would otherwise go to stderr is in-band as `error`; `type` is a stable enum so a consumer can branch programmatically without regex on the message.",
       "additionalProperties": false,
       "required": ["success", "v", "error", "type"],
       "properties": {
@@ -153,7 +153,7 @@
     "deleteData": {
       "type": "object",
       "title": "delete --json data",
-      "description": "Payload for `ynotes delete --json`. The three category arrays partition the requested ids — each requested id appears in exactly one of `deleted`, `ambiguous`, `not_found`. Always emitted in full (empty arrays included) so a consumer never has to branch on key presence.",
+      "description": "Payload for `ynotes delete --json`. The three category arrays partition the requested ids — each requested id appears in exactly one of `deleted`, `ambiguous`, `not_found`. Always emitted in full (empty arrays included) so a consumer never has to branch on key presence. Exit-code asymmetry: when `ambiguous` or `not_found` is non-empty the process exits `1` even though this remains a *success* envelope (`success: true`) — the envelope describes the partition, the exit code reports partial failure. `delete` is the only command that pairs a success envelope with a non-zero exit; to detect a fully-clean delete, check that both `ambiguous` and `not_found` are empty rather than relying on the exit code or `success` alone.",
       "additionalProperties": false,
       "required": ["requested", "deleted", "ambiguous", "not_found", "dry_run"],
       "properties": {
@@ -341,7 +341,10 @@
                   "additionalProperties": false,
                   "required": ["path", "notes"],
                   "properties": {
-                    "path": { "type": "string" },
+                    "path": {
+                      "type": "string",
+                      "description": "The `.ynotes` directory backing the store."
+                    },
                     "notes": { "type": "integer", "minimum": 0 }
                   }
                 }
@@ -357,8 +360,14 @@
                   "additionalProperties": false,
                   "required": ["reason"],
                   "properties": {
-                    "path": { "type": "string" },
-                    "reason": { "type": "string" }
+                    "path": {
+                      "type": "string",
+                      "description": "The `.ynotes` directory — present when a store was located but its notes could not be read; absent when store discovery itself failed (no valid `.ynotes` was located), in which case the implicated path is carried in `reason` instead."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "Why the store (or its notes) could not be read; carries the implicated path inline when the discrete `path` field is absent."
+                    }
                   }
                 }
               }

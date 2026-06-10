@@ -77,6 +77,44 @@ fn doctor_json_emits_a_machine_readable_report() {
     assert!(data.get("store").is_some(), "store key present");
 }
 
+/// `doctor --json` on a store whose notes are unreadable surfaces the discrete
+/// `store.unreadable.path` (the located `.ynotes` directory), not just the path
+/// buried in `reason` (P1.5a). Corrupting the index makes `all_notes()` fail
+/// while discovery still succeeds — the Case-A `unreadable` branch, where a
+/// store path is known and so the discrete field is populated.
+#[test]
+fn doctor_json_unreadable_store_carries_the_discrete_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    // HEAD is intact, so discovery succeeds; the index is malformed JSON, so
+    // `all_notes()` fails — landing in the `unreadable` branch with a path.
+    std::fs::write(dir.path().join(".ynotes/index/by-path.json"), "not json").unwrap();
+
+    // doctor reports the degraded state; surfacing it is not itself a failure.
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["doctor", "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let unreadable = &v["data"]["store"]["unreadable"];
+    let path = unreadable["path"]
+        .as_str()
+        .expect("the located store path is populated as a discrete field");
+    assert!(
+        path.ends_with(".ynotes"),
+        "path names the located store directory: {path:?}"
+    );
+    assert!(
+        !unreadable["reason"].as_str().unwrap().is_empty(),
+        "reason carries the human detail"
+    );
+}
+
 #[test]
 fn query_on_a_nonexistent_file_names_the_path_and_exits_zero() {
     // A mistyped path must fail loudly: querying a file that does not exist
@@ -612,6 +650,11 @@ fn delete_reports_not_found_and_exits_one() {
         .failure()
         .code(1);
     let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    // The documented delete asymmetry (P1.5a): a non-empty `not_found` exits 1
+    // while the envelope stays a *success* — the exit code reports the partial
+    // failure, the envelope describes the partition. A consumer must read the
+    // arrays, not branch on `success` or `$?` alone.
+    assert_eq!(v["success"], serde_json::json!(true));
     assert_eq!(v["data"]["not_found"][0], "deadbeef");
 }
 

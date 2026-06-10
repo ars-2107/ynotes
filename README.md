@@ -145,13 +145,21 @@ file in a week?* If yes, leave a note. If no, skip.
 - **Exit codes:** `0` = success *even if there are no notes or only orphans*
   (inspect `data.notes[]` — empty is not an error; an orphan-only result is
   also exit 0); `2` = bad invocation (including a path outside the store);
-  `1` = real failure.
+  `1` = real failure (and `delete`'s partial-failure case — see below).
 - **`--json` always writes the envelope to stdout** — including on failure.
-  Branch on the `success` field, not the exit code: a `1`/`2` exit carries
-  a `{success: false, error, type}` envelope (where `type` is one of
-  `usage`, `engine`, `io`, `render`), so the response is parseable in both
-  paths. On a `0` exit, `data.warnings[]` carries non-fatal advisories
-  (e.g. a missing target file: `notes` empty, the path issue in-band).
+  Branch on the `success` field, not the exit code: a `2` (usage) or `1`
+  (engine/io/render) failure carries a `{success: false, error, type}`
+  envelope (where `type` is one of `usage`, `engine`, `io`, `render`), so the
+  response is parseable in both paths. On a `0` exit, `data.warnings[]`
+  carries non-fatal advisories (e.g. a missing target file: `notes` empty,
+  the path issue in-band).
+  - **`delete` is the one exception to "branch on `success`".** When some
+    requested ids are `ambiguous` or `not_found`, `delete` emits a *success*
+    envelope (`success: true`) yet exits `1`: the envelope describes the
+    partition, the exit code reports the partial failure. To tell a
+    fully-clean delete from a partial one, check that `data.ambiguous` and
+    `data.not_found` are both empty — neither `success` nor the exit code
+    alone is sufficient.
 - **`query` returns one `notes` array.** In `v=5` (the current contract),
   `query --json` carries `{query, notes, warnings}` — every resolved note
   in a single array, with `status` discriminating. Group by

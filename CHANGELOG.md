@@ -9,6 +9,21 @@ explicitly here.
 
 ## [Unreleased]
 
+### Documentation
+
+- Clarified the `--json` agent contract (schema + README) around the
+  exit-code / envelope relationship: `delete` emits a `success: true`
+  envelope while exiting `1` when some requested ids are `ambiguous` or
+  `not_found`, so the success/failure envelope is **not** a function of the
+  exit code. A fully-clean delete is identified by empty `ambiguous` and
+  `not_found` arrays; `delete` is the only command with this asymmetry.
+- Documented `doctorData.store.unreadable.path`: present when a `.ynotes`
+  store was located but unreadable, absent when discovery itself failed (the
+  implicated path is then carried in `reason`). Added discrete-`path`
+  descriptions to the `found`/`unreadable` doctor variants for parity.
+- Schema descriptions only — no field, type, or output change; the contract
+  version stays `v: 5`.
+
 ### Added
 
 - `ynotes reanchor --json` — machine-readable refresh report. Mirrors the
