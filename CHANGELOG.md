@@ -20,6 +20,17 @@ explicitly here.
 
 ### Fixed
 
+- Argument errors rejected by clap (an unknown subcommand, a missing required
+  argument, an unexpected flag or value) now honour the `--json` agent
+  contract. Previously `Cli::parse()` let clap exit the process before dispatch,
+  so `ynotes save --json` (missing `<FILE>`), `ynotes bogus --json`, and the
+  like exited `2` with **empty stdout** and a diagnostic on stderr —
+  contradicting the schema's promise that "the envelope is emitted on stdout
+  regardless of exit code". The binary now parses with `try_parse` and, when
+  `--json` was requested, renders the failure envelope
+  (`{"success": false, "v": 5, "type": "usage", …}`) to stdout and exits `2`.
+  `--help`/`--version` (successful outputs) and the non-`--json` human path are
+  unchanged. No schema `v` bump — the failure-envelope shape is unchanged.
 - `list` and `query` text now render the note's scope alongside its range
   (`x.rs file:1:3` vs `x.rs range:1:3`), matching the shape `save` and
   `delete` already use. Previously a file-scoped note over a 3-line file and

@@ -954,3 +954,94 @@ fn list_text_renders_scope_prefix_distinguishing_file_from_range() {
         .stdout(predicate::str::contains("x.rs file:1:3"))
         .stdout(predicate::str::contains("x.rs range:1:3"));
 }
+
+// --- clap-level errors under `--json` (P1.5a) -------------------------------
+//
+// The agent contract (ynotes.schema.json) promises the envelope is emitted on
+// stdout regardless of exit code. clap rejects bad invocations *before*
+// dispatch, so these cases must be routed through the JSON failure envelope
+// too — otherwise a `--json` consumer gets empty stdout and a stderr line it
+// was told it would never have to read.
+
+/// A missing required argument under `--json` must still yield the failure
+/// envelope on stdout (not an empty stdout + a clap diagnostic on stderr).
+#[test]
+fn clap_missing_arg_with_json_emits_failure_envelope_on_stdout() {
+    let out = ynotes()
+        .args(["save", "--json"]) // `<FILE>` is required; clap rejects this
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::is_empty())
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .expect("clap usage errors under --json must emit a valid JSON envelope");
+    assert_eq!(parsed["success"], serde_json::json!(false));
+    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["type"], serde_json::json!("usage"));
+    assert!(
+        !parsed["error"].as_str().unwrap().is_empty(),
+        "error message must be carried in-band: {parsed:?}"
+    );
+}
+
+/// An unknown subcommand under `--json` is also a clap-level rejection and
+/// must ride the same failure envelope on stdout.
+#[test]
+fn clap_unknown_subcommand_with_json_emits_failure_envelope_on_stdout() {
+    let out = ynotes()
+        .args(["definitely-not-a-real-command", "--json"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::is_empty())
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("valid JSON envelope on stdout");
+    assert_eq!(parsed["success"], serde_json::json!(false));
+    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["type"], serde_json::json!("usage"));
+}
+
+/// `--help` requested alongside `--json` is NOT an error: help/version are
+/// successful outputs and must still print to stdout with exit 0, never wrapped
+/// in a failure envelope.
+#[test]
+fn help_under_json_is_still_plain_help_not_a_failure_envelope() {
+    let out = ynotes()
+        .args(["save", "--help", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    assert!(
+        stdout.contains("Usage") || stdout.contains("usage"),
+        "help text expected on stdout, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("\"success\""),
+        "help must not be rendered as a JSON envelope: {stdout}"
+    );
+}
+
+/// Without `--json`, a clap usage error keeps its native behaviour: the
+/// diagnostic on stderr, stdout empty, exit 2. The fix must not regress the
+/// human path.
+#[test]
+fn clap_usage_error_without_json_keeps_stderr_diagnostic() {
+    ynotes()
+        .arg("save") // missing `<FILE>`, no --json
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("required"));
+}
