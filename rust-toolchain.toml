@@ -4,8 +4,8 @@
 # `stable` tracks the latest stable release. The Minimum Supported Rust Version
 # is enforced separately by `rust-version` in Cargo.toml and the `msrv` CI job;
 # the two are intentionally different concerns (newest stable for development,
-# an explicit floor for downstream users). A release-engineering team may choose
-# to pin an exact version here (e.g. "1.89.0") for fully reproducible builds.
+# an explicit floor for downstream users). Pin an exact version here (e.g.
+# "1.89.0") if fully reproducible builds are required.
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]

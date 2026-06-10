@@ -24,6 +24,10 @@ lint:
 check:
     cargo check --all-targets --all-features
 
+# Build the API docs; a broken intra-doc link fails the build (AGENTS.md).
+docs:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
 # Tests via nextest, plus doctests (nextest does not run doctests).
 test:
     cargo nextest run --all-features
@@ -33,12 +37,16 @@ test:
 deny:
     cargo deny check
 
+# Verify the npm manifests' versions match Cargo.toml (CI enforces this).
+version-check:
+    node scripts/sync-version.mjs --check
+
 # Static analysis of the GitHub Actions workflows (injection, misconfig).
 audit-ci:
     pipx run zizmor .
 
 # The exact gate CI enforces, in order. Run before pushing.
-ci: fmt-check lint test deny
+ci: fmt-check lint docs test deny version-check
 
 # Optimised release build.
 build:
@@ -48,7 +56,7 @@ build:
 run *ARGS:
     cargo run --bin ynotes -- {{ARGS}}
 
-# Build release artefacts with cargo-dist. The release *workflow* is generated
-# by `dist init`, not hand-written — see .github/workflows/release.yml.
-dist:
-    dist build
+# Propagate the Cargo.toml version into the npm manifests (package.json and
+# npm/*/package.json). Run after bumping the version, before tagging a release.
+sync-version:
+    node scripts/sync-version.mjs

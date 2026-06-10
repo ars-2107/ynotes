@@ -2,16 +2,14 @@
 /target/
 # rustfmt backups.
 **/*.rs.bk
-# MSVC debugger symbols (Windows builds, incl. CI) — from the canonical
-# github/gitignore Rust template.
+# MSVC debugger symbols (Windows builds).
 *.pdb
 
 # Cargo.lock is intentionally NOT ignored: ynotes ships a binary, so the
 # lockfile is part of the reproducible deliverable and is committed. A library
-# would ignore it (see the GitHub Rust .gitignore template).
+# would ignore it.
 
-# insta snapshot tests: pending/rejected snapshots are never committed; they
-# are reviewed and accepted with `cargo insta`.
+# insta pending/rejected snapshots — reviewed and accepted with `cargo insta`.
 *.pending-snap
 *.snap.new
 
@@ -20,13 +18,19 @@ cargo-timing*.html
 # ctags output.
 tags
 
-# Local reference cache — NOT for version control. `.opensrc/` holds large
-# upstream clones AND the curated RUST_REFERENCES.md; all of it is local-only
-# and regenerable via `opensrc fetch`. Ignore the whole tree, no exceptions.
+# npm distribution. Per-platform `package.json` manifests are committed; the
+# binaries dropped into `npm/*/bin/` at release time are not.
+/npm/*/bin/
+node_modules/
+*.tgz
+
 /.opensrc/
 
-# Editors & OS noise. (gitoxide argues these belong in a global
-# core.excludesFile; ripgrep/jj/bat list them directly — following the majority.)
+# Local working docs (TODO, scratch planning). The committed docs live at the
+# repo root; `/docs/` is private scratch space.
+/docs/
+
+# Editors & OS noise.
 .idea/
 .vscode/
 .zed/

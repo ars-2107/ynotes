@@ -10,6 +10,7 @@
 //! in the library instead. See AGENTS.md.
 
 mod cli;
+mod colour;
 mod command_error;
 mod commands;
 mod logging;

@@ -10,7 +10,19 @@
 //! matchable errors here; presentational errors (with exit codes) in the
 //! binary's `command_error` module.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Render an `Error::Io` for `Display`. Lifted out of the `#[error(...)]`
+/// attribute so the `NotFound` case can take a different wording from a
+/// generic I/O failure without conditionalising the format string itself.
+fn display_io_error(path: &Path, source: &std::io::Error) -> String {
+    match source.kind() {
+        std::io::ErrorKind::NotFound => {
+            format!("`{}` does not exist (check the path)", path.display())
+        }
+        _ => format!("i/o error at `{}`: {source}", path.display()),
+    }
+}
 
 /// A specialised [`Result`](std::result::Result) for engine operations.
 ///
@@ -33,8 +45,11 @@ pub enum Error {
     /// An I/O operation failed.
     ///
     /// The path is carried alongside the OS error so messages can name the
-    /// file involved instead of emitting a context-free "No such file".
-    #[error("i/o error at `{path}`")]
+    /// file involved instead of emitting a context-free "No such file". The
+    /// `Display` form special-cases `NotFound` to match the wording the
+    /// query path already uses for a missing target, so the same condition
+    /// reads the same way wherever the front-end surfaces it.
+    #[error("{}", display_io_error(path, source))]
     Io {
         /// The filesystem path the failed operation targeted.
         path: PathBuf,
@@ -49,4 +64,29 @@ pub enum Error {
     /// user; it should describe what was expected, not just what was found.
     #[error("invalid ynotes data: {0}")]
     Invalid(String),
+
+    /// No store was found at or above the search origin.
+    ///
+    /// Distinct from [`Error::Invalid`] because the front-end's reaction
+    /// differs: this warrants pointing the user at `ynotes init`, not
+    /// reporting corruption.
+    #[error("no ynotes store found from `{searched_from}` upward (run `ynotes init`)")]
+    StoreNotFound {
+        /// The directory the upward search began from.
+        searched_from: PathBuf,
+    },
+
+    /// A user-supplied path resolves outside the store's work tree.
+    ///
+    /// Distinct from [`Error::Invalid`] because the front-end maps this to a
+    /// *usage* exit code (`2`) — the user pointed at the wrong place, not a
+    /// runtime failure. Raised by [`crate::Store::relativize`] when the
+    /// absolute form of the given path does not sit under the store root.
+    #[error("`{}` is outside the ynotes store at `{}`", path.display(), store_root.display())]
+    OutsideStore {
+        /// The path the caller supplied.
+        path: PathBuf,
+        /// The work tree the path was expected to sit beneath.
+        store_root: PathBuf,
+    },
 }

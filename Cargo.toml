@@ -6,7 +6,7 @@
 #                are compiled into the binary only — they are NOT part of the
 #                library, so a CLI concern cannot leak into the engine.
 #
-# This is bat's model (one crate, lib + bin). When a second front-end (an MCP
+# One crate, lib + bin. When a second front-end (an MCP
 # server) becomes real, `src/lib.rs` and its modules lift out into their own
 # crate with no logic changes — the boundary already exists. See AGENTS.md.
 
@@ -25,6 +25,10 @@ authors = ["ynotes contributors"]
 keywords = ["cli", "context", "annotations", "agents", "code"]
 categories = ["command-line-utilities", "development-tools"]
 default-run = "ynotes"
+# ynotes is distributed via npm and GitHub Releases, not crates.io (see
+# AGENTS.md -> Releases). `publish = false` makes `cargo publish` refuse, so
+# the crate cannot reach a registry by accident.
+publish = false
 
 [lib]
 name = "ynotes"
@@ -62,9 +66,46 @@ clap_complete = "4"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Note records and the by-path index are JSON (machine artefacts like
+# `.git/objects`).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Content-addressed note ids (SHA-256, hex). Pure-Rust RustCrypto crate,
+# MIT/Apache (keeps the `cargo deny` licence set clean).
+sha2 = "0.10"
+# Timestamps. `jiff` is the modern datetime crate; avoids the `time` crate's
+# epoch/UTC traps.
+jiff = { version = "0.2", features = ["serde"] }
+# Atomic note writes: write to a temp file in the same dir, then rename.
+tempfile = "3"
+# Cross-platform advisory file locking for the by-path index. Two concurrent
+# `save`s of *different* notes to the same target previously each did an
+# unsynchronised read-modify-write of `.ynotes/index/by-path.json` and one
+# could lose the other's entry. `fs4` wraps POSIX `flock` / Windows
+# `LockFileEx`; MIT/Apache, no extra licences for `cargo deny`.
+fs4 = "0.13"
+# R4 structural anchoring. tree-sitter parses the file; one grammar crate per
+# supported language (always on, broad set — a deliberate product choice).
+# Each grammar ships vendored C built via `cc`; all are MIT/Apache, so the
+# strict `cargo deny` licence allow-list is unaffected. The grammar/core
+# versions below are a resolved-and-built-together set; bump deliberately.
+tree-sitter = "0.26.8"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-python = "0.25.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-java = "0.23.5"
+tree-sitter-c = "0.24.2"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-bash = "0.25.1"
+tree-sitter-json = "0.24.8"
+tree-sitter-html = "0.23.2"
+tree-sitter-css = "0.25.0"
 
 [dev-dependencies]
-# Black-box testing of the built binary (bat / jujutsu style).
+# Black-box testing of the built binary.
 assert_cmd = "2"
 predicates = "3"
 # Snapshot testing. A natural fit for ynotes's structured drift/diff output:
@@ -79,7 +120,7 @@ lto = "thin"
 strip = "debuginfo"
 
 # Optimise dependencies even in debug builds: a one-off cost that buys much
-# faster test/debug runs (jujutsu uses this).
+# faster test/debug runs.
 [profile.dev.package."*"]
 opt-level = 3
 codegen-units = 1
@@ -90,15 +131,3 @@ debug = "line-tables-only"
 inherits = "dev"
 debug = false
 incremental = false
-
-# cargo-dist owns this block and the release workflow. Regenerate both with
-# `dist init` once a toolchain is available; do not hand-maintain them.
-[package.metadata.dist]
-ci = ["github"]
-installers = ["shell", "powershell"]
-targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-]

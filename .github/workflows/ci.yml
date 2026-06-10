@@ -96,6 +96,135 @@ jobs:
           persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@6c8f9facfa5047ec02d8485b6bf52b587b7777d1 # v2
 
+  docs:
+    name: doc (intra-doc links)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # AGENTS.md comment doctrine: a broken intra-doc link is a hard CI
+      # failure. `RUSTFLAGS` does not reach rustdoc, so this is enforced here
+      # with `RUSTDOCFLAGS` rather than the top-level env.
+      - run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  version-sync:
+    name: npm version sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      # `package.json` + `npm/*/package.json` versions are generated from
+      # Cargo.toml (invariant 9). Fail the build if they have drifted.
+      - run: node scripts/sync-version.mjs --check
+
+  install-test:
+    name: npm install (${{ matrix.os }})
+    # Exercises the real npm distribution: build the host binary, assemble the
+    # launcher + its per-platform package, install globally, run it. Catches a
+    # regression in `bin/ynotes.js` or the `optionalDependencies` wiring that
+    # unit tests cannot see. The release build is heavy, so this runs on pushes
+    # to main, not on every PR.
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, pkg: linux-x64 }
+          - { os: macos-14, pkg: darwin-arm64 }
+          - { os: windows-latest, pkg: win32-x64 }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: build, pack, install, run
+        shell: bash
+        env:
+          PKG: ${{ matrix.pkg }}
+          RUNNER_OS: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          # Build the host binary and drop it into its per-platform package.
+          cargo build --release --bin ynotes
+          bin=ynotes
+          [ "$RUNNER_OS" = Windows ] && bin=ynotes.exe
+          mkdir -p "npm/$PKG/bin"
+          cp "target/release/$bin" "npm/$PKG/bin/$bin"
+          node scripts/sync-version.mjs
+          # Pack the launcher + this platform package, install both globally,
+          # and confirm the shim resolves and runs the binary off PATH.
+          packs=$(mktemp -d)
+          npm pack --pack-destination "$packs"
+          npm pack "./npm/$PKG" --pack-destination "$packs"
+          npm install -g "$packs"/*.tgz
+          ynotes --version
+          ynotes doctor
+
+  install-test-musl:
+    name: npm install (${{ matrix.pkg }} / Alpine)
+    # The glibc runners cannot exercise the musl path. This builds the musl
+    # binary on the host, then installs and runs it inside a real Alpine
+    # container — exercising npm's `libc` filtering and the launcher's musl
+    # detection. Push-to-main only (the build is heavy).
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, pkg: linux-musl-x64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, pkg: linux-musl-arm64 }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: build musl binary, pack, install + run in Alpine
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          PKG: ${{ matrix.pkg }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          CC=musl-gcc cargo build --release --target "$TARGET" --bin ynotes
+          mkdir -p "npm/$PKG/bin"
+          cp "target/$TARGET/release/ynotes" "npm/$PKG/bin/ynotes"
+          node scripts/sync-version.mjs
+          packs=$(mktemp -d)
+          npm pack --pack-destination "$packs"
+          npm pack "./npm/$PKG" --pack-destination "$packs"
+          # Install and run inside a real musl (Alpine) environment: npm here
+          # applies `libc` filtering, and the launcher must detect musl and
+          # resolve the musl package. node:22-alpine resolves to the host's
+          # architecture automatically.
+          docker run --rm -v "$packs":/packs:ro node:22-alpine sh -c '
+            set -e
+            npm install -g /packs/*.tgz
+            ynotes --version
+            ynotes doctor
+          '
+
   zizmor:
     name: zizmor (actions static analysis)
     runs-on: ubuntu-latest
