@@ -1,8 +1,8 @@
 //! Engine-level tests against the `ynotes` library API.
 //!
-//! Demonstrates the snapshot-testing setup. `insta` inline snapshots (`@"…"`)
-//! keep the expected value next to the assertion and need no `.snap` file; run
-//! `cargo insta review` after changing rendered output to update them.
+//! `insta` inline snapshots (`@"…"`) keep the expected value next to the
+//! assertion and need no `.snap` file; run `cargo insta review` after changing
+//! rendered output to update them.
 
 #[test]
 fn invalid_error_renders_stable_message() {
