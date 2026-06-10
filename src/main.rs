@@ -32,10 +32,15 @@ fn main() -> ExitCode {
     match commands::dispatch(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            // One terse line on stderr; the full chain goes to debug-level
-            // tracing so `-vv` (or YNOTES_LOG) reveals the cause without
-            // cluttering normal output.
-            eprintln!("{PROGRAM}: {err}");
+            // A `Rendered` error has already written a JSON envelope to
+            // stdout; printing the unstructured message to stderr too would
+            // give a `--json` consumer two streams to reconcile. Every other
+            // error class gets the usual one-line diagnostic.
+            if !matches!(err, command_error::CommandError::Rendered { .. }) {
+                eprintln!("{PROGRAM}: {err}");
+            }
+            // The full chain goes to debug-level tracing so `-vv` (or
+            // YNOTES_LOG) reveals the cause without cluttering normal output.
             tracing::debug!(error = ?err, "command failed");
             err.exit_code()
         }

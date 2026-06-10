@@ -1,7 +1,7 @@
 //! `ynotes completions <shell>` — emit a shell completion script.
 //!
 //! Generated from the same `clap` command tree the binary parses with, so
-//! completions cannot drift from the real flags (bat / agent-browser do this).
+//! completions cannot drift from the real flags.
 
 use std::io::{self, Write};
 

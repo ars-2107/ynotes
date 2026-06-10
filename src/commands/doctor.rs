@@ -5,18 +5,104 @@
 //! report self-contained (version, platform), and surface a *degraded* state
 //! before it puzzles a user — chiefly a missing `git` binary, which silently
 //! disables R1's transport rung.
+//!
+//! `--json` emits the same facts as a single object so an agent can read the
+//! environment without parsing the human text.
 
 use std::io::Write;
 
+use serde::Serialize;
+
+use super::json_envelope;
 use crate::command_error::CommandError;
 
-/// Write diagnostic information to stdout.
+/// The discovered store, for the JSON report: a found-and-readable store
+/// carries its path and note count; a missing or unreadable one carries a
+/// reason instead, mirroring the three states the human form distinguishes.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum StoreReport {
+    /// A store was found and its notes could be counted.
+    Found {
+        /// The `.ynotes` directory backing the store.
+        path: String,
+        /// How many notes it holds.
+        notes: usize,
+    },
+    /// No store was found in any ancestor of the current directory.
+    None,
+    /// A store was found but could not be read; `reason` is the engine error.
+    Unreadable {
+        /// The `.ynotes` directory, when one was located.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// Why the store (or its notes) could not be read.
+        reason: String,
+    },
+}
+
+/// The machine-readable environment report (`doctor --json`).
+#[derive(Serialize)]
+struct DoctorReport<'a> {
+    /// The compiled ynotes version.
+    version: &'a str,
+    /// `OS-ARCH`, the same string the human form prints.
+    platform: String,
+    /// The `git` executable's version, or `null` when no `git` binary is on
+    /// `PATH` (R1's transport rung is then disabled).
+    git: Option<String>,
+    /// The store the current directory resolves to.
+    store: StoreReport,
+}
+
+/// Write diagnostic information to stdout — human text, or JSON when `json`.
 ///
 /// # Errors
 ///
 /// Returns [`CommandError::Io`] if writing to stdout fails — for example when
-/// the output is piped into a process that exits early (broken pipe).
-pub(crate) fn run() -> Result<(), CommandError> {
+/// the output is piped into a process that exits early (broken pipe) — or
+/// [`CommandError::Render`] if the JSON report cannot be serialised.
+pub(crate) fn run(json: bool) -> Result<(), CommandError> {
+    if json {
+        json_envelope::wrap(run_json)
+    } else {
+        run_text()
+    }
+}
+
+/// Emit the environment report as a single JSON object, wrapped in the
+/// shared `{success, v, data}` envelope.
+fn run_json() -> Result<(), CommandError> {
+    let report = DoctorReport {
+        version: ynotes::version(),
+        platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        git: ynotes::git_version(),
+        store: match ynotes::Store::discover() {
+            Ok(store) => {
+                let path = store.root().display().to_string();
+                match store.all_notes() {
+                    Ok(notes) => StoreReport::Found {
+                        path,
+                        notes: notes.len(),
+                    },
+                    Err(e) => StoreReport::Unreadable {
+                        path: Some(path),
+                        reason: e.to_string(),
+                    },
+                }
+            }
+            Err(ynotes::Error::StoreNotFound { .. }) => StoreReport::None,
+            Err(e) => StoreReport::Unreadable {
+                path: None,
+                reason: e.to_string(),
+            },
+        },
+    };
+    json_envelope::print_success(&report)
+}
+
+/// Emit the environment report as the human text format.
+fn run_text() -> Result<(), CommandError> {
     // Lock stdout once and write through the guard: fewer syscalls, and no
     // interleaving if this ever logs concurrently.
     let mut out = std::io::stdout().lock();
