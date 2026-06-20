@@ -128,3 +128,71 @@ fn reindex_does_not_clobber_a_customised_gitattributes() {
         "reindex must not clobber a customised file"
     );
 }
+
+/// Run a real two-branch merge where each branch adds a note to the same file.
+/// With JSONL + the auto-written `merge=union` attribute, the merged index
+/// stays valid and no note is lost.
+#[test]
+fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path();
+    git(repo, &["init", "-q"]);
+    git(repo, &["config", "user.email", "t@t"]);
+    git(repo, &["config", "user.name", "t"]);
+    std::fs::write(repo.join("foo.rs"), "a\nb\nc\n").unwrap();
+    ynotes().current_dir(repo).arg("init").assert().success();
+
+    // Base commit: one note already present (matches the verified union case).
+    ynotes().current_dir(repo).args(["save", "foo.rs", "3", "-m", "base"]).assert().success();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "base"]);
+
+    // ours: add a note at line 1.
+    git(repo, &["checkout", "-q", "-b", "ours"]);
+    ynotes().current_dir(repo).args(["save", "foo.rs", "1", "-m", "ours"]).assert().success();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "ours"]);
+
+    // theirs (from base): add a note at line 2.
+    git(repo, &["checkout", "-q", "-"]);
+    git(repo, &["checkout", "-q", "-b", "theirs"]);
+    ynotes().current_dir(repo).args(["save", "foo.rs", "2", "-m", "theirs"]).assert().success();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "theirs"]);
+
+    // Merge theirs into ours, driven by the committed .ynotes/.gitattributes.
+    git(repo, &["checkout", "-q", "ours"]);
+    let merge = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["merge", "-q", "theirs"])
+        .output()
+        .expect("git merge runs");
+    assert!(
+        merge.status.success(),
+        "merge should not conflict: {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+
+    // The merged index is valid JSONL.
+    let idx = std::fs::read_to_string(repo.join(".ynotes/index/by-path.json")).unwrap();
+    for line in idx.lines().filter(|l| !l.trim().is_empty()) {
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|e| panic!("invalid JSONL line {line:?}: {e}"));
+    }
+
+    // All three notes survive; reindex confirms the index already agrees.
+    let out = ynotes().current_dir(repo).args(["reindex", "--json"]).assert().success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["data"]["indexed"], serde_json::json!(3), "all three notes indexed after merge");
+    assert_eq!(v["data"]["recovered"].as_array().unwrap().len(), 0, "nothing to recover");
+    assert_eq!(v["data"]["dangling"].as_array().unwrap().len(), 0, "nothing dangling");
+}
