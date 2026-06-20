@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ars-2107/ynotes/main/ynotes.schema.json",
   "title": "ynotes --json output",
-  "description": "The machine-facing contract for every `ynotes <cmd> --json` output (`save`, `query`, `list`, `update`, `delete`, `prune`, `reanchor`, `doctor`). Every shape rides inside the same envelope: `{success: bool, v: int, …}` — `data` on success, `error`+`type` on failure. The envelope is emitted on stdout regardless of exit code, so a JSON consumer never has to branch on `$?` to parse the response. This is a stable, versioned agent contract: `v` is bumped whenever a field changes and mirrored in tests/agent_contract.rs. See AGENTS.md invariant 7.",
+  "description": "The machine-facing contract for every `ynotes <cmd> --json` output (`save`, `query`, `list`, `update`, `delete`, `prune`, `reanchor`, `reindex`, `doctor`). Every shape rides inside the same envelope: `{success: bool, v: int, …}` — `data` on success, `error`+`type` on failure. The envelope is emitted on stdout regardless of exit code, so a JSON consumer never has to branch on `$?` to parse the response. This is a stable, versioned agent contract: `v` is bumped whenever a field changes and mirrored in tests/agent_contract.rs. See AGENTS.md invariant 7.",
   "oneOf": [
     { "$ref": "#/$defs/successEnvelope" },
     { "$ref": "#/$defs/failureEnvelope" }
@@ -26,6 +26,7 @@
             { "$ref": "#/$defs/deleteData" },
             { "$ref": "#/$defs/pruneData" },
             { "$ref": "#/$defs/reanchorData" },
+            { "$ref": "#/$defs/reindexData" },
             { "$ref": "#/$defs/doctorData" }
           ]
         }
@@ -308,6 +309,44 @@
         }
       }
     },
+    "reindexData": {
+      "type": "object",
+      "title": "reindex --json data",
+      "description": "Payload for `ynotes reindex --json`. The index (`by-path.json`) is a cache rebuilt from the note records on disk, which are the source of truth; this reports how the rebuilt index differed from the one that was there. A healthy store yields empty `recovered`/`dangling`/`malformed`. Under `--dry-run` the same shape is emitted with `dry_run: true` and the on-disk index is left untouched. Reindex never invokes the anchor ladder, so note ids are unaffected.",
+      "additionalProperties": false,
+      "required": ["dry_run", "scanned", "indexed", "recovered", "dangling", "malformed"],
+      "properties": {
+        "dry_run": {
+          "type": "boolean",
+          "description": "true when invoked with `--dry-run` — the on-disk index was not written."
+        },
+        "scanned": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Note records read successfully while walking `notes/`."
+        },
+        "indexed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Distinct notes in the rebuilt index."
+        },
+        "recovered": {
+          "type": "array",
+          "description": "Ids found on disk that the previous index did not list — pointers that were missing and have been restored. Always present; empty when the index already agreed with disk.",
+          "items": { "$ref": "#/$defs/noteId" }
+        },
+        "dangling": {
+          "type": "array",
+          "description": "Ids the previous index listed with no file behind them on disk — dangling pointers that have been dropped. Always present; empty when none.",
+          "items": { "$ref": "#/$defs/noteId" }
+        },
+        "malformed": {
+          "type": "array",
+          "description": "Paths under `notes/` that could not be read or parsed as a note. Skipped (left out of the rebuilt index) but reported, never silently discarded — a readable note is never dropped and an unreadable one is never hidden. Always present; empty when none.",
+          "items": { "type": "string" }
+        }
+      }
+    },
     "doctorData": {
       "type": "object",
       "title": "doctor --json data",
@@ -470,8 +509,8 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "const": 5,
-      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
+      "const": 6,
+      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
     },
     "lineRange": {
       "type": "array",

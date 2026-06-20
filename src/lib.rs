@@ -54,7 +54,7 @@ pub use query::{LineSpec, QueryResult, ResolvedNote, list, query};
 pub use reanchor::{ReanchorChange, ReanchorReport, ReanchorSkip, ReanchorSkipReason, reanchor};
 pub use selector::{GitSelector, SCHEMA, SelectorBundle};
 pub use source::{LineRange, SourceFile};
-pub use store::Store;
+pub use store::{ReindexReport, Store};
 pub use structural::{Language, PathStep, StructuralSelector, capture as structural_capture};
 
 /// Returns the compiled version of ynotes.

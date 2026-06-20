@@ -14,6 +14,7 @@ pub(crate) mod list;
 pub(crate) mod prune;
 pub(crate) mod query;
 pub(crate) mod reanchor;
+pub(crate) mod reindex;
 pub(crate) mod render;
 pub(crate) mod safety;
 pub(crate) mod save;
@@ -48,6 +49,7 @@ pub(crate) fn dispatch(cli: &Cli) -> Result<(), CommandError> {
         Command::Update { id, message, json } => update::run(id, message.as_deref(), *json),
         Command::Delete { ids, dry_run, json } => delete::run(ids, *dry_run, *json),
         Command::Prune { dry_run, json } => prune::run(*dry_run, *json),
+        Command::Reindex { dry_run, json } => reindex::run(*dry_run, *json),
         Command::Doctor { json } => doctor::run(*json),
         Command::Completions { shell } => completions::run(*shell),
     }

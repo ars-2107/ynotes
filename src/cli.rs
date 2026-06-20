@@ -167,6 +167,24 @@ pub(crate) enum Command {
         json: bool,
     },
 
+    /// Rebuild the by-path index from the notes on disk.
+    ///
+    /// The index (`.ynotes/index/by-path.json`) is a cache, not the source of
+    /// truth — the notes under `.ynotes/notes/` are. Run this if the index is
+    /// lost, hand-edited, or out of step with the notes (a query or delete
+    /// that logs "run a reindex" is the signal). It recovers any note on disk
+    /// the index forgot and drops any pointer with no note behind it; it never
+    /// touches the notes themselves, so it cannot lose context.
+    Reindex {
+        /// Show what would be rebuilt without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit machine-readable JSON instead of the text report.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Report the environment ynotes resolves against (read-only health
     /// check): version, platform, `git` availability, and the discovered
     /// store with its note count. `--json` emits the same facts as a

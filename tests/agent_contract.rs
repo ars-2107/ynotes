@@ -33,16 +33,17 @@ fn json_contract_is_stable_and_id_is_deterministic() {
     let save_json = String::from_utf8(save_out.get_output().stdout.clone()).unwrap();
     // The id is content-addressed over (target, scope, bundle, body) and the
     // *internal* `Scope::Line` enum is preserved (invariant #6) — every
-    // JSON contract bump has been presentation-only (v3 collapsed `Line`
-    // and `Range` to a single `"scope":"range"`; v4 wrapped payloads in
+    // JSON contract bump has been additive or presentation-only (v3 collapsed
+    // `Line` and `Range` to a single `"scope":"range"`; v4 wrapped payloads in
     // the `{success, v, data}` envelope; v5 unified `query`'s
     // `matched`/`orphaned` split into a single `notes` array matching
-    // `list`). So this id hash is the same as v2; only the surface
-    // representation moved.
+    // `list`; v6 added the `reindex` payload without touching any existing
+    // one). So this id hash is the same as v2; only the surface representation
+    // moved.
     insta::assert_snapshot!(save_json.trim(), @r#"
     {
       "success": true,
-      "v": 5,
+      "v": 6,
       "data": {
         "id": "23df0ca3934b6b67a004dbaa21c5daf668869bee013d55f5b6f7768fabfd5ae0",
         "target": "code.rs",
@@ -65,7 +66,7 @@ fn json_contract_is_stable_and_id_is_deterministic() {
     insta::assert_snapshot!(query_json.trim(), @r#"
     {
       "success": true,
-      "v": 5,
+      "v": 6,
       "data": {
         "query": {
           "file": "code.rs",
@@ -120,7 +121,7 @@ fn save_json_escapes_a_special_character_in_the_target_path() {
     let parsed: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("save --json must emit valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["v"], serde_json::json!(6));
     assert_eq!(parsed["data"]["target"], serde_json::json!(name));
     assert_eq!(parsed["data"]["created"], serde_json::json!(true));
 }
@@ -150,7 +151,7 @@ fn query_json_emits_failure_envelope_on_invalid_input() {
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("--json must always emit valid JSON, even on failure");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["v"], serde_json::json!(6));
     assert_eq!(parsed["type"], serde_json::json!("engine"));
     assert!(
         parsed["error"]
@@ -188,7 +189,7 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     insta::assert_snapshot!(empty_json.trim(), @r#"
     {
       "success": true,
-      "v": 5,
+      "v": 6,
       "data": {
         "dry_run": false,
         "changed": [],
@@ -226,7 +227,7 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["v"], serde_json::json!(6));
     let data = &parsed["data"];
     assert_eq!(data["dry_run"], serde_json::json!(false));
     assert_eq!(data["changed"].as_array().unwrap().len(), 0);
@@ -235,4 +236,47 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     assert_eq!(skipped.len(), 1, "the bait note skipped as orphan");
     assert_eq!(skipped[0]["reason_code"], serde_json::json!("orphaned"));
     assert_eq!(skipped[0]["target"], serde_json::json!("code.rs"));
+}
+
+/// `reindex --json` is the index-repair scripting surface (the contract added
+/// in `v6`). Snapshot the healthy-store case — one note, index already in step
+/// with disk — since that all-empty shape is what a consumer sees on a sound
+/// repo and is fully deterministic (the note id is content-addressed). The
+/// recovery and dangling-pointer paths are exercised behaviourally in
+/// `tests/cli.rs`, where the index is deliberately damaged first.
+#[test]
+fn reindex_json_envelope_is_stable_on_a_healthy_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "1", "-m", "load-bearing"])
+        .assert()
+        .success();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["reindex", "--json"])
+        .assert()
+        .success();
+    let reindex_json = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    insta::assert_snapshot!(reindex_json.trim(), @r#"
+    {
+      "success": true,
+      "v": 6,
+      "data": {
+        "dry_run": false,
+        "scanned": 1,
+        "indexed": 1,
+        "recovered": [],
+        "dangling": [],
+        "malformed": []
+      }
+    }
+    "#);
 }

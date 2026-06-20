@@ -76,6 +76,8 @@ cargo run --bin ynotes -- update abc1234 -m "new body" # replace a note's body i
 cargo run --bin ynotes -- delete abc1234 def5678     # remove notes by id / hex prefix
 cargo run --bin ynotes -- prune --dry-run            # preview orphan cleanup
 cargo run --bin ynotes -- prune                      # remove every orphaned note
+cargo run --bin ynotes -- reindex --dry-run          # preview an index rebuild
+cargo run --bin ynotes -- reindex                    # rebuild the by-path index from disk
 ```
 
 A saved note is not pinned to line 40:78. When the file is edited, `query`
@@ -116,7 +118,7 @@ file in a week?* If yes, leave a note. If no, skip.
 ### How to drive it
 
 - **Always use `--json`.** Every JSON output rides inside the same envelope —
-  `{success: true, v: 5, data: …}` on success, `{success: false, v: 5,
+  `{success: true, v: 6, data: …}` on success, `{success: false, v: 6,
   error: …, type: …}` on failure — so a consumer always parses one shape
   and branches on `success`. The schema is versioned, snapshot-locked, and
   published as [`ynotes.schema.json`](ynotes.schema.json) (JSON Schema
@@ -160,11 +162,11 @@ file in a week?* If yes, leave a note. If no, skip.
     fully-clean delete from a partial one, check that `data.ambiguous` and
     `data.not_found` are both empty — neither `success` nor the exit code
     alone is sufficient.
-- **`query` returns one `notes` array.** In `v=5` (the current contract),
-  `query --json` carries `{query, notes, warnings}` — every resolved note
-  in a single array, with `status` discriminating. Group by
-  `status == "orphaned"` if you want the historical matched-vs-orphaned
-  split; orphans are still always returned (the never-drop promise).
+- **`query` returns one `notes` array.** Since `v=5`, `query --json` carries
+  `{query, notes, warnings}` — every resolved note in a single array, with
+  `status` discriminating. Group by `status == "orphaned"` if you want the
+  historical matched-vs-orphaned split; orphans are still always returned (the
+  never-drop promise).
 - **`query` never writes; `reanchor` is the only write-on-resolve path.** An
   agent can `query` freely (idempotent, safe to parallelise). When notes have
   drifted, run `reanchor` (optionally `--dry-run` first) as a deliberate
@@ -177,6 +179,14 @@ file in a week?* If yes, leave a note. If no, skip.
   (≥4 chars); a prefix that matches multiple notes is refused, never
   silently fans out. `prune` removes every orphan in one pass (use
   `--dry-run` first to preview).
+- **`reindex` repairs the index, not the notes.** The notes under
+  `.ynotes/notes/` are the source of truth; `.ynotes/index/by-path.json` is a
+  cache that maps each file to its note ids. If that cache is lost,
+  hand-edited, or out of step — a `query` or `delete` that logs "run a
+  reindex" is the tell — `reindex` rebuilds it from disk: it recovers any note
+  the index forgot and drops any pointer with no note behind it, reporting both
+  in `--json` (`recovered`/`dangling`/`malformed`). It never reads the anchor
+  ladder and never touches a note, so it cannot lose context or rotate an id.
 
 ### Understanding `--explain` scores
 

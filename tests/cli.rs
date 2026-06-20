@@ -68,7 +68,7 @@ fn doctor_json_emits_a_machine_readable_report() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     // Envelope: every --json output rides inside `{success, v, data}`.
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["v"], serde_json::json!(6));
     let data = &parsed["data"];
     assert!(data.get("version").is_some(), "version key present");
     assert!(data.get("platform").is_some(), "platform key present");
@@ -193,7 +193,7 @@ fn save_then_query_round_trips_through_the_binary() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["v"], serde_json::json!(6));
     // v=5 unified `query`'s matched/orphaned split into a single `notes`
     // array (status discriminates) — match the new shape here.
     assert_eq!(
@@ -1023,7 +1023,7 @@ fn clap_missing_arg_with_json_emits_failure_envelope_on_stdout() {
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("clap usage errors under --json must emit a valid JSON envelope");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["v"], serde_json::json!(6));
     assert_eq!(parsed["type"], serde_json::json!("usage"));
     assert!(
         !parsed["error"].as_str().unwrap().is_empty(),
@@ -1048,7 +1048,7 @@ fn clap_unknown_subcommand_with_json_emits_failure_envelope_on_stdout() {
     let parsed: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("valid JSON envelope on stdout");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(5));
+    assert_eq!(parsed["v"], serde_json::json!(6));
     assert_eq!(parsed["type"], serde_json::json!("usage"));
 }
 
@@ -1087,4 +1087,242 @@ fn clap_usage_error_without_json_keeps_stderr_diagnostic() {
         .code(2)
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("required"));
+}
+
+/// The index is a cache; `reindex` must be able to rebuild it from the notes
+/// on disk. Delete the index entirely, confirm the note has gone missing to a
+/// query (the index is how a query finds it), then `reindex` and confirm the
+/// note is anchored again. This is the recovery path behind the "run a
+/// reindex" advisory.
+#[test]
+fn reindex_rebuilds_a_deleted_index() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "1", "-m", "load-bearing"])
+        .assert()
+        .success();
+
+    // Obliterate the index. The note file under `notes/` is untouched.
+    std::fs::remove_file(dir.path().join(".ynotes/index/by-path.json")).unwrap();
+
+    // With no index, the query cannot find the note (the never-drop promise is
+    // about resolution, not a missing index — the note is simply unindexed).
+    ynotes()
+        .current_dir(dir.path())
+        .args(["query", "code.rs", "1"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no notes"));
+
+    // Reindex rebuilds the pointer from disk: one note scanned, one recovered.
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["reindex", "--json"])
+        .assert()
+        .success();
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(parsed["data"]["scanned"], serde_json::json!(1));
+    assert_eq!(parsed["data"]["indexed"], serde_json::json!(1));
+    assert_eq!(parsed["data"]["recovered"].as_array().unwrap().len(), 1);
+    assert_eq!(parsed["data"]["dangling"].as_array().unwrap().len(), 0);
+
+    // The note is reachable again, and intact.
+    ynotes()
+        .current_dir(dir.path())
+        .args(["query", "code.rs", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("anchored"));
+}
+
+/// `reindex --dry-run` reports what it *would* reconcile but writes nothing —
+/// the index stays as broken as it was, so a query still cannot find the note.
+#[test]
+fn reindex_dry_run_writes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "1", "-m", "load-bearing"])
+        .assert()
+        .success();
+    std::fs::remove_file(dir.path().join(".ynotes/index/by-path.json")).unwrap();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["reindex", "--dry-run", "--json"])
+        .assert()
+        .success();
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(parsed["data"]["dry_run"], serde_json::json!(true));
+    assert_eq!(parsed["data"]["recovered"].as_array().unwrap().len(), 1);
+
+    // Nothing was written: the index is still gone, so the note stays unindexed.
+    assert!(
+        !dir.path().join(".ynotes/index/by-path.json").exists(),
+        "a dry run must not write the index"
+    );
+    ynotes()
+        .current_dir(dir.path())
+        .args(["query", "code.rs", "1"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no notes"));
+}
+
+/// An index pointer with no note file behind it is dangling. `reindex` drops
+/// it — the rebuilt index reflects only what is actually on disk.
+#[test]
+fn reindex_drops_a_dangling_pointer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\n").unwrap();
+    let save = ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "1", "-m", "load-bearing", "--json"])
+        .assert()
+        .success();
+    let save_json: serde_json::Value =
+        serde_json::from_slice(&save.get_output().stdout).expect("valid JSON");
+    let id = save_json["data"]["id"].as_str().unwrap().to_owned();
+
+    // Delete the note record while leaving its index pointer in place — the
+    // store fans out by the first two hex chars of the id.
+    let note_file = dir
+        .path()
+        .join(".ynotes/notes")
+        .join(&id[..2])
+        .join(format!("{}.json", &id[2..]));
+    std::fs::remove_file(&note_file).unwrap();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["reindex", "--json"])
+        .assert()
+        .success();
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(parsed["data"]["scanned"], serde_json::json!(0));
+    assert_eq!(parsed["data"]["indexed"], serde_json::json!(0));
+    let dangling = parsed["data"]["dangling"].as_array().unwrap();
+    assert_eq!(dangling.len(), 1, "the orphaned pointer is reported");
+    assert_eq!(dangling[0], serde_json::json!(id));
+}
+
+/// A note file that cannot be parsed must not sink the rebuild and must not be
+/// silently discarded (invariant #4): `reindex` skips it, counts the good
+/// records, and reports the bad path in `malformed`.
+#[test]
+fn reindex_skips_a_malformed_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "1", "-m", "load-bearing"])
+        .assert()
+        .success();
+
+    // Plant a non-note `.json` file in a fan-out directory.
+    let junk_dir = dir.path().join(".ynotes/notes/ab");
+    std::fs::create_dir_all(&junk_dir).unwrap();
+    std::fs::write(junk_dir.join("not-a-note.json"), "{ this is not json").unwrap();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["reindex", "--json"])
+        .assert()
+        .success();
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(
+        parsed["data"]["scanned"],
+        serde_json::json!(1),
+        "the real note still counts"
+    );
+    assert_eq!(parsed["data"]["indexed"], serde_json::json!(1));
+    let malformed = parsed["data"]["malformed"].as_array().unwrap();
+    assert_eq!(
+        malformed.len(),
+        1,
+        "the junk file is reported, not dropped silently"
+    );
+    assert!(
+        malformed[0].as_str().unwrap().contains("not-a-note.json"),
+        "the malformed path is named: {:?}",
+        malformed[0]
+    );
+}
+
+/// A note record copied to a second file (so two files share one content id)
+/// is indexed exactly once, and the duplicate is surfaced — `scanned` counts
+/// both files, `indexed` counts the one note, and a warning names the copy.
+/// A silent merge would leave the `scanned` > `indexed` gap unexplained.
+#[test]
+fn reindex_indexes_a_duplicated_record_once_and_warns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\n").unwrap();
+    let save = ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "1", "-m", "load-bearing", "--json"])
+        .assert()
+        .success();
+    let save_json: serde_json::Value =
+        serde_json::from_slice(&save.get_output().stdout).expect("valid JSON");
+    let id = save_json["data"]["id"].as_str().unwrap().to_owned();
+
+    // Copy the record to a sibling filename in the same fan-out directory:
+    // a second file on disk carrying the same content id.
+    let prefix_dir = dir.path().join(".ynotes/notes").join(&id[..2]);
+    let original = prefix_dir.join(format!("{}.json", &id[2..]));
+    std::fs::copy(&original, prefix_dir.join("copy.json")).unwrap();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["reindex", "--json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("duplicate note record"));
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(
+        parsed["data"]["scanned"],
+        serde_json::json!(2),
+        "both files read"
+    );
+    assert_eq!(
+        parsed["data"]["indexed"],
+        serde_json::json!(1),
+        "indexed once"
+    );
+    assert_eq!(parsed["data"]["recovered"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["data"]["dangling"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["data"]["malformed"].as_array().unwrap().len(), 0);
 }
