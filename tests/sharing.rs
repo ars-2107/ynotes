@@ -18,7 +18,11 @@ fn index_is_byte_identical_regardless_of_save_order() {
     let build = |order: &[&str]| -> Vec<u8> {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("foo.rs"), "a\nb\nc\n").unwrap();
-        ynotes().current_dir(dir.path()).arg("init").assert().success();
+        ynotes()
+            .current_dir(dir.path())
+            .arg("init")
+            .assert()
+            .success();
         for at in order {
             ynotes()
                 .current_dir(dir.path())
@@ -42,7 +46,11 @@ fn index_is_byte_identical_regardless_of_save_order() {
 fn a_legacy_object_format_index_is_still_read() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("foo.rs"), "a\nb\nc\n").unwrap();
-    ynotes().current_dir(dir.path()).arg("init").assert().success();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
     let out = ynotes()
         .current_dir(dir.path())
         .args(["save", "foo.rs", "1", "-m", "ctx", "--json"])
@@ -58,7 +66,11 @@ fn a_legacy_object_format_index_is_still_read() {
     )
     .unwrap();
 
-    let out = ynotes().current_dir(dir.path()).arg("list").assert().success();
+    let out = ynotes()
+        .current_dir(dir.path())
+        .arg("list")
+        .assert()
+        .success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     assert!(
         stdout.contains("foo.rs"),
@@ -71,13 +83,22 @@ fn a_legacy_object_format_index_is_still_read() {
 #[test]
 fn a_malformed_index_errors_with_a_reindex_hint() {
     let dir = tempfile::tempdir().expect("tempdir");
-    ynotes().current_dir(dir.path()).arg("init").assert().success();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
     std::fs::write(
         dir.path().join(".ynotes/index/by-path.json"),
         "{ broken not json",
     )
     .unwrap();
-    let out = ynotes().current_dir(dir.path()).arg("list").assert().failure().code(1);
+    let out = ynotes()
+        .current_dir(dir.path())
+        .arg("list")
+        .assert()
+        .failure()
+        .code(1);
     let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
     assert!(
         stderr.contains("reindex"),
@@ -90,14 +111,21 @@ fn a_malformed_index_errors_with_a_reindex_hint() {
 #[test]
 fn init_writes_git_integration_files() {
     let dir = tempfile::tempdir().expect("tempdir");
-    ynotes().current_dir(dir.path()).arg("init").assert().success();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
     let attrs = std::fs::read_to_string(dir.path().join(".ynotes/.gitattributes")).unwrap();
     assert!(
         attrs.contains("index/by-path.json merge=union"),
         "gitattributes must set the union driver: {attrs}"
     );
     let ignore = std::fs::read_to_string(dir.path().join(".ynotes/.gitignore")).unwrap();
-    assert!(ignore.contains("lock"), "gitignore must exclude the lock file: {ignore}");
+    assert!(
+        ignore.contains("lock"),
+        "gitignore must exclude the lock file: {ignore}"
+    );
 }
 
 /// Running `reindex` on a store that lacks the files (e.g. created by an older
@@ -105,9 +133,17 @@ fn init_writes_git_integration_files() {
 #[test]
 fn reindex_adds_missing_git_integration_files() {
     let dir = tempfile::tempdir().expect("tempdir");
-    ynotes().current_dir(dir.path()).arg("init").assert().success();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
     std::fs::remove_file(dir.path().join(".ynotes/.gitattributes")).unwrap();
-    ynotes().current_dir(dir.path()).arg("reindex").assert().success();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("reindex")
+        .assert()
+        .success();
     assert!(
         dir.path().join(".ynotes/.gitattributes").exists(),
         "reindex must restore a missing .gitattributes"
@@ -118,10 +154,18 @@ fn reindex_adds_missing_git_integration_files() {
 #[test]
 fn reindex_does_not_clobber_a_customised_gitattributes() {
     let dir = tempfile::tempdir().expect("tempdir");
-    ynotes().current_dir(dir.path()).arg("init").assert().success();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
     let path = dir.path().join(".ynotes/.gitattributes");
     std::fs::write(&path, "# custom\n").unwrap();
-    ynotes().current_dir(dir.path()).arg("reindex").assert().success();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("reindex")
+        .assert()
+        .success();
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
         "# custom\n",
@@ -152,7 +196,11 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
     ynotes().current_dir(repo).arg("init").assert().success();
 
     // Base commit: one note already present (matches the verified union case).
-    ynotes().current_dir(repo).args(["save", "foo.rs", "3", "-m", "base"]).assert().success();
+    ynotes()
+        .current_dir(repo)
+        .args(["save", "foo.rs", "3", "-m", "base"])
+        .assert()
+        .success();
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-qm", "base"]);
 
@@ -171,14 +219,22 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
 
     // ours: add a note at line 1.
     git(repo, &["checkout", "-q", "-b", "ours"]);
-    ynotes().current_dir(repo).args(["save", "foo.rs", "1", "-m", "ours"]).assert().success();
+    ynotes()
+        .current_dir(repo)
+        .args(["save", "foo.rs", "1", "-m", "ours"])
+        .assert()
+        .success();
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-qm", "ours"]);
 
     // theirs (from base): add a note at line 2.
     git(repo, &["checkout", "-q", &base_branch]);
     git(repo, &["checkout", "-q", "-b", "theirs"]);
-    ynotes().current_dir(repo).args(["save", "foo.rs", "2", "-m", "theirs"]).assert().success();
+    ynotes()
+        .current_dir(repo)
+        .args(["save", "foo.rs", "2", "-m", "theirs"])
+        .assert()
+        .success();
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-qm", "theirs"]);
 
@@ -203,9 +259,25 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
     }
 
     // All three notes survive; reindex confirms the index already agrees.
-    let out = ynotes().current_dir(repo).args(["reindex", "--json"]).assert().success();
+    let out = ynotes()
+        .current_dir(repo)
+        .args(["reindex", "--json"])
+        .assert()
+        .success();
     let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
-    assert_eq!(v["data"]["indexed"], serde_json::json!(3), "all three notes indexed after merge");
-    assert_eq!(v["data"]["recovered"].as_array().unwrap().len(), 0, "nothing to recover");
-    assert_eq!(v["data"]["dangling"].as_array().unwrap().len(), 0, "nothing dangling");
+    assert_eq!(
+        v["data"]["indexed"],
+        serde_json::json!(3),
+        "all three notes indexed after merge"
+    );
+    assert_eq!(
+        v["data"]["recovered"].as_array().unwrap().len(),
+        0,
+        "nothing to recover"
+    );
+    assert_eq!(
+        v["data"]["dangling"].as_array().unwrap().len(),
+        0,
+        "nothing dangling"
+    );
 }

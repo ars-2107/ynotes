@@ -694,16 +694,19 @@ impl Store {
         if let Ok(map) = serde_json::from_slice::<IndexMap>(bytes) {
             return Ok(map);
         }
-        let text =
-            std::str::from_utf8(bytes).map_err(|_| Error::IndexMalformed { path: path.to_path_buf() })?;
+        let text = std::str::from_utf8(bytes).map_err(|_| Error::IndexMalformed {
+            path: path.to_path_buf(),
+        })?;
         let mut map = IndexMap::new();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
-            let entry: IndexLine = serde_json::from_str(line)
-                .map_err(|_| Error::IndexMalformed { path: path.to_path_buf() })?;
+            let entry: IndexLine =
+                serde_json::from_str(line).map_err(|_| Error::IndexMalformed {
+                    path: path.to_path_buf(),
+                })?;
             map.entry(entry.target).or_default().push(entry.id);
         }
         Ok(map)
@@ -714,7 +717,10 @@ impl Store {
     /// has customised is left untouched. These let a committed `.ynotes/` merge
     /// cleanly with zero per-clone git setup.
     fn write_git_config_files(&self) -> Result<()> {
-        write_file_noclobber(&self.root.join(".gitattributes"), GITATTRIBUTES_CONTENTS.as_bytes())?;
+        write_file_noclobber(
+            &self.root.join(".gitattributes"),
+            GITATTRIBUTES_CONTENTS.as_bytes(),
+        )?;
         write_file_noclobber(&self.root.join(".gitignore"), GITIGNORE_CONTENTS.as_bytes())?;
         Ok(())
     }
