@@ -89,4 +89,14 @@ pub enum Error {
         /// The work tree the path was expected to sit beneath.
         store_root: PathBuf,
     },
+
+    /// The by-path index was readable but parseable in neither the current
+    /// (JSONL) nor the legacy (single-object) format — typically a merge that
+    /// mangled the cache. The index is rebuildable, so the remedy is carried in
+    /// the message (mirrors [`Error::StoreNotFound`]'s embedded hint).
+    #[error("index `{}` is malformed; run `ynotes reindex` to rebuild it from your notes", path.display())]
+    IndexMalformed {
+        /// The index file that failed to parse.
+        path: PathBuf,
+    },
 }

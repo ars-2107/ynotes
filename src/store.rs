@@ -7,7 +7,7 @@
 //! .ynotes/
 //!   HEAD                     format sentinel; its presence marks the root
 //!   notes/<aa>/<rest>.json   one note per file, fanned out by id prefix
-//!   index/by-path.json       target-path -> [note id, ...]
+//!   index/by-path.json       union-mergeable JSONL: one {"target","id"} line per note
 //! ```
 //!
 //! Two rules the rest of the engine relies on:
@@ -46,6 +46,15 @@ const ENV_DIR: &str = "YNOTES_DIR";
 
 /// The reverse index: which note ids belong to each target path.
 type IndexMap = std::collections::BTreeMap<String, Vec<String>>;
+
+/// One on-disk index entry. The index is stored as JSONL — one of these per
+/// line — so `git merge=union` keeps concurrent adds structurally valid (a
+/// nested JSON object cannot be union-merged without risking invalid JSON).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct IndexLine {
+    target: String,
+    id: String,
+}
 
 /// A handle to an opened store, identified by its `.ynotes` directory.
 #[derive(Debug, Clone)]
@@ -566,15 +575,7 @@ impl Store {
                 }
             }
 
-            // Sort ids within each target so the rebuilt file is byte-identical
-            // regardless of directory iteration order. The map is already a
-            // `BTreeMap` (sorted by target), so the whole index is then
-            // deterministic — which keeps the diff clean when `.ynotes/` is
-            // committed and shared. (`seen` already removed duplicates, so no
-            // `dedup` is needed here.)
-            for ids in rebuilt.values_mut() {
-                ids.sort();
-            }
+            // `write_index` sorts/dedups on write, so no explicit sort here.
 
             // `seen` is exactly the distinct ids found on disk. `BTreeSet`'s
             // `difference` yields ascending order, so both lists are
@@ -646,19 +647,78 @@ impl Store {
 
     fn read_index(&self) -> Result<IndexMap> {
         let path = self.index_path();
-        match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
-                Error::Invalid(format!("index `{}` is malformed JSON: {e}", path.display()))
-            }),
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(IndexMap::new()),
-            Err(source) => Err(Error::Io { path, source }),
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(IndexMap::new());
+            }
+            Err(source) => return Err(Error::Io { path, source }),
+        };
+        let mut index = Self::parse_index(&bytes, &path)?;
+        // A union merge can leave duplicate or out-of-order ids; collapse them
+        // so callers always see a canonical, duplicate-free view regardless of
+        // how git left the file on disk.
+        for ids in index.values_mut() {
+            ids.sort();
+            ids.dedup();
         }
+        Ok(index)
+    }
+
+    /// Parse index bytes, accepting both the current JSONL format and the
+    /// legacy single-object format (so a store written by an older ynotes still
+    /// opens). An empty/whitespace file is an empty index.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::IndexMalformed`] if the bytes parse as neither format.
+    fn parse_index(bytes: &[u8], path: &Path) -> Result<IndexMap> {
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(IndexMap::new());
+        }
+        // Legacy nested-object format first. A multi-entry JSONL file is not a
+        // valid single object, and a single JSONL line fails to parse as
+        // `BTreeMap<String, Vec<String>>` (its values are strings, not arrays),
+        // so detection is unambiguous.
+        if let Ok(map) = serde_json::from_slice::<IndexMap>(bytes) {
+            return Ok(map);
+        }
+        let text =
+            std::str::from_utf8(bytes).map_err(|_| Error::IndexMalformed { path: path.to_path_buf() })?;
+        let mut map = IndexMap::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let entry: IndexLine = serde_json::from_str(line)
+                .map_err(|_| Error::IndexMalformed { path: path.to_path_buf() })?;
+            map.entry(entry.target).or_default().push(entry.id);
+        }
+        Ok(map)
     }
 
     fn write_index(&self, index: &IndexMap) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(index)
-            .map_err(|e| Error::Invalid(format!("cannot serialise index: {e}")))?;
-        write_file(&self.index_path(), &bytes)
+        // Sorted JSONL, one entry per line. Sorting (targets via the BTreeMap,
+        // ids here) plus dedup makes the file byte-identical regardless of
+        // insertion order, which keeps shared-store diffs minimal and union
+        // merges clean.
+        let mut buf = String::new();
+        for (target, ids) in index {
+            let mut ids: Vec<&String> = ids.iter().collect();
+            ids.sort();
+            ids.dedup();
+            for id in ids {
+                let line = serde_json::to_string(&IndexLine {
+                    target: target.clone(),
+                    id: id.clone(),
+                })
+                .map_err(|e| Error::Invalid(format!("cannot serialise index: {e}")))?;
+                buf.push_str(&line);
+                buf.push('\n');
+            }
+        }
+        write_file(&self.index_path(), buf.as_bytes())
     }
 
     /// Run `f` while holding the store's exclusive advisory lock on
