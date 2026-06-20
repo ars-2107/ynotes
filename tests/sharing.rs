@@ -88,6 +88,8 @@ fn a_malformed_index_errors_with_a_reindex_hint() {
         .arg("init")
         .assert()
         .success();
+    // No source file needed: `list` reaches read_index (the malformed index)
+    // before any note content is touched.
     std::fs::write(
         dir.path().join(".ynotes/index/by-path.json"),
         "{ broken not json",
@@ -122,9 +124,9 @@ fn init_writes_git_integration_files() {
         "gitattributes must set the union driver: {attrs}"
     );
     let ignore = std::fs::read_to_string(dir.path().join(".ynotes/.gitignore")).unwrap();
-    assert!(
-        ignore.contains("lock"),
-        "gitignore must exclude the lock file: {ignore}"
+    assert_eq!(
+        ignore, "lock\n",
+        "gitignore must be exactly the lock entry: {ignore}"
     );
 }
 
@@ -147,6 +149,29 @@ fn reindex_adds_missing_git_integration_files() {
     assert!(
         dir.path().join(".ynotes/.gitattributes").exists(),
         "reindex must restore a missing .gitattributes"
+    );
+}
+
+/// `reindex --dry-run` is a preview and must write nothing — including the
+/// git-integration files. Remove `.gitattributes`, dry-run, confirm it stays
+/// absent.
+#[test]
+fn reindex_dry_run_does_not_write_git_integration_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::remove_file(dir.path().join(".ynotes/.gitattributes")).unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["reindex", "--dry-run"])
+        .assert()
+        .success();
+    assert!(
+        !dir.path().join(".ynotes/.gitattributes").exists(),
+        "reindex --dry-run must not write the git-integration files"
     );
 }
 
@@ -214,7 +239,10 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
             .output()
             .expect("git symbolic-ref runs");
         assert!(out.status.success(), "git symbolic-ref failed");
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        String::from_utf8(out.stdout)
+            .expect("symbolic-ref output is valid UTF-8")
+            .trim()
+            .to_owned()
     };
 
     // ours: add a note at line 1.
