@@ -39,6 +39,15 @@ const HEAD_CONTENTS: &str = "ynotes 1\n";
 /// lose each other's entries.
 const LOCK_FILENAME: &str = "lock";
 
+/// Contents of `.ynotes/.gitattributes`: makes the by-path index cache
+/// union-mergeable. `union` is a git built-in driver, so this needs no
+/// per-clone `.git/config` setup. The pattern is relative to `.ynotes/`.
+const GITATTRIBUTES_CONTENTS: &str = "index/by-path.json merge=union\n";
+
+/// Contents of `.ynotes/.gitignore`: keeps the local advisory lock out of
+/// commits while the rest of the store is shared.
+const GITIGNORE_CONTENTS: &str = "lock\n";
+
 /// Environment variable that points directly at a `.ynotes` directory,
 /// bypassing the upward walk (`GIT_DIR` semantics — needed by a future
 /// long-lived server that has no meaningful current directory).
@@ -124,6 +133,7 @@ impl Store {
         mkdir(&store.index_dir())?;
         write_file(&store.head_path(), HEAD_CONTENTS.as_bytes())?;
         store.write_index(&IndexMap::new())?;
+        store.write_git_config_files()?;
         Ok(store)
     }
 
@@ -587,6 +597,7 @@ impl Store {
 
             if !dry_run {
                 self.write_index(&rebuilt)?;
+                self.write_git_config_files()?;
             }
 
             Ok(ReindexReport {
@@ -696,6 +707,16 @@ impl Store {
             map.entry(entry.target).or_default().push(entry.id);
         }
         Ok(map)
+    }
+
+    /// Write the store's git-integration files (`.gitattributes`,
+    /// `.gitignore`) if absent. Idempotent and non-clobbering: a file the user
+    /// has customised is left untouched. These let a committed `.ynotes/` merge
+    /// cleanly with zero per-clone git setup.
+    fn write_git_config_files(&self) -> Result<()> {
+        write_file_noclobber(&self.root.join(".gitattributes"), GITATTRIBUTES_CONTENTS.as_bytes())?;
+        write_file_noclobber(&self.root.join(".gitignore"), GITIGNORE_CONTENTS.as_bytes())?;
+        Ok(())
     }
 
     fn write_index(&self, index: &IndexMap) -> Result<()> {

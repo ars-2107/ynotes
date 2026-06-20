@@ -84,3 +84,47 @@ fn a_malformed_index_errors_with_a_reindex_hint() {
         "a malformed index must hint at reindex: {stderr}"
     );
 }
+
+/// A freshly initialised store carries the git-integration files so a
+/// committed `.ynotes/` "just works" on merge with zero per-clone setup.
+#[test]
+fn init_writes_git_integration_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes().current_dir(dir.path()).arg("init").assert().success();
+    let attrs = std::fs::read_to_string(dir.path().join(".ynotes/.gitattributes")).unwrap();
+    assert!(
+        attrs.contains("index/by-path.json merge=union"),
+        "gitattributes must set the union driver: {attrs}"
+    );
+    let ignore = std::fs::read_to_string(dir.path().join(".ynotes/.gitignore")).unwrap();
+    assert!(ignore.contains("lock"), "gitignore must exclude the lock file: {ignore}");
+}
+
+/// Running `reindex` on a store that lacks the files (e.g. created by an older
+/// ynotes) restores them.
+#[test]
+fn reindex_adds_missing_git_integration_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes().current_dir(dir.path()).arg("init").assert().success();
+    std::fs::remove_file(dir.path().join(".ynotes/.gitattributes")).unwrap();
+    ynotes().current_dir(dir.path()).arg("reindex").assert().success();
+    assert!(
+        dir.path().join(".ynotes/.gitattributes").exists(),
+        "reindex must restore a missing .gitattributes"
+    );
+}
+
+/// A user-customised git-integration file is never clobbered.
+#[test]
+fn reindex_does_not_clobber_a_customised_gitattributes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes().current_dir(dir.path()).arg("init").assert().success();
+    let path = dir.path().join(".ynotes/.gitattributes");
+    std::fs::write(&path, "# custom\n").unwrap();
+    ynotes().current_dir(dir.path()).arg("reindex").assert().success();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# custom\n",
+        "reindex must not clobber a customised file"
+    );
+}
