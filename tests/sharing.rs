@@ -156,6 +156,19 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-qm", "base"]);
 
+    // Record the base branch by name so `theirs` branches from the same
+    // ancestor without depending on `git checkout -` reflog magic / the
+    // ambient default-branch config.
+    let base_branch = {
+        let out = std::process::Command::new("git")
+            .current_dir(repo)
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .output()
+            .expect("git symbolic-ref runs");
+        assert!(out.status.success(), "git symbolic-ref failed");
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+
     // ours: add a note at line 1.
     git(repo, &["checkout", "-q", "-b", "ours"]);
     ynotes().current_dir(repo).args(["save", "foo.rs", "1", "-m", "ours"]).assert().success();
@@ -163,7 +176,7 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
     git(repo, &["commit", "-qm", "ours"]);
 
     // theirs (from base): add a note at line 2.
-    git(repo, &["checkout", "-q", "-"]);
+    git(repo, &["checkout", "-q", &base_branch]);
     git(repo, &["checkout", "-q", "-b", "theirs"]);
     ynotes().current_dir(repo).args(["save", "foo.rs", "2", "-m", "theirs"]).assert().success();
     git(repo, &["add", "-A"]);
@@ -173,7 +186,7 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
     git(repo, &["checkout", "-q", "ours"]);
     let merge = std::process::Command::new("git")
         .current_dir(repo)
-        .args(["merge", "-q", "theirs"])
+        .args(["merge", "--no-edit", "-q", "theirs"])
         .output()
         .expect("git merge runs");
     assert!(
