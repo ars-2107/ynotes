@@ -27,6 +27,13 @@ explicitly here.
 
 ### Added
 
+- Team sharing: `.ynotes/` is now safe to commit and merge. The by-path index
+  is stored as sorted, union-mergeable JSONL, and a new store writes
+  `.ynotes/.gitattributes` (`merge=union`) and `.ynotes/.gitignore` (the lock
+  file) so concurrent note-adds on parallel branches merge cleanly with zero
+  setup. A malformed index now errors with a `run ynotes reindex` hint. The
+  index format is read backward-compatibly (old single-object stores still
+  open). No `--json` contract change.
 - `ynotes reindex` — rebuild the by-path index from the notes on disk. The
   index (`.ynotes/index/by-path.json`) is a cache; the note records under
   `.ynotes/notes/` are the source of truth. Run it when the cache is lost,

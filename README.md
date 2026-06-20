@@ -220,6 +220,25 @@ With [`just`](https://github.com/casey/just): `just` lists every task;
 version-sync). Tests use [`cargo-nextest`](https://nexte.st). Releases are cut
 by a hand-written workflow — push a `vX.Y.Z` tag; see [`AGENTS.md`](AGENTS.md).
 
+## Sharing notes across a team
+
+`.ynotes/` is built to be committed and merged like docs. Commit it alongside
+your code and push.
+
+- **Notes never conflict or get lost.** Each note is a content-addressed file
+  under `.ynotes/notes/`, so two people adding different notes touch different
+  files, and an identical note is byte-identical. Merges of `notes/` are clean.
+- **The index is a self-healing cache.** `.ynotes/index/by-path.json` is a
+  rebuildable lookup cache stored as union-mergeable JSONL. ynotes writes a
+  `.ynotes/.gitattributes` (`merge=union`) for you, so concurrent additions
+  merge cleanly with no setup. The local lock file is auto-ignored via
+  `.ynotes/.gitignore`.
+- **If a merge ever mangles the index**, ynotes tells you to run
+  `ynotes reindex`, which rebuilds the cache from your notes (the source of
+  truth) in one command. No note is ever lost in the process.
+
+Workflow: commit `.ynotes/`, push, and merge like any other change.
+
 ## License
 
 Dual-licensed under either [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT)
