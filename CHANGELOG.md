@@ -9,6 +9,27 @@ explicitly here.
 
 ## [Unreleased]
 
+### Added
+- `ynotes lookup [--target <path>] [--body-contains <text>]` — resolve a stable
+  `(target, body)` handle to a note's current id(s). `--json` payload `lookupData`.
+
+### Fixed
+- Note files are no longer corrupted by a team merge: the store ships
+  `notes/** -merge` so git never textually merges content-addressed note JSON
+  (a concurrent reanchor/update or identical save previously injected conflict
+  markers and broke every read of the store).
+- `ynotes reindex` now recovers a malformed index instead of failing with the
+  same "run reindex" error it recommends.
+- A missing index over surviving notes is now reported (`run reindex`) instead
+  of silently reading as "no notes".
+
+### Changed
+- `--json` agent contract bumped to `v: 7` (adds the `lookup` payload; mirrored
+  in `tests/agent_contract.rs` and `ynotes.schema.json`).
+- The store's `.gitattributes`/`.gitignore` are now maintained line-by-line
+  (managed lines are ensured without clobbering user customisation), upgrading
+  older stores to the `notes/** -merge` guard on the next `init`/`reindex`.
+
 ### Documentation
 
 - Clarified the `--json` agent contract (schema + README) around the

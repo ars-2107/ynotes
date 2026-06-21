@@ -188,6 +188,17 @@ file in a week?* If yes, leave a note. If no, skip.
   in `--json` (`recovered`/`dangling`/`malformed`). It never reads the anchor
   ladder and never touches a note, so it cannot lose context or rotate an id.
 
+### `ynotes lookup [--target <path>] [--body-contains <text>] [--json]`
+
+Find note(s) by a stable handle and print their current id(s). A note's id
+rotates on `reanchor`/`update`, so to reference a note durably (PR, comment),
+record the `(target, body)` and resolve it back to the live id:
+
+    ynotes lookup --target src/auth.rs --body-contains "token refresh"
+
+At least one of `--target` / `--body-contains` is required. `--body-contains`
+is a case-sensitive substring. Read-only; no match still exits 0.
+
 ### Understanding `--explain` scores
 
 `query --explain` (and the `rungs` field under `--json --explain`) surfaces
@@ -225,17 +236,30 @@ by a hand-written workflow — push a `vX.Y.Z` tag; see [`AGENTS.md`](AGENTS.md)
 `.ynotes/` is built to be committed and merged like docs. Commit it alongside
 your code and push.
 
-- **Notes never conflict or get lost.** Each note is a content-addressed file
-  under `.ynotes/notes/`, so two people adding different notes touch different
-  files, and an identical note is byte-identical. Merges of `notes/` are clean.
-- **The index is a self-healing cache.** `.ynotes/index/by-path.json` is a
-  rebuildable lookup cache stored as union-mergeable JSONL. ynotes writes a
-  `.ynotes/.gitattributes` (`merge=union`) for you, so concurrent additions
-  merge cleanly with no setup. The local lock file is auto-ignored via
-  `.ynotes/.gitignore`.
-- **If a merge ever mangles the index**, ynotes tells you to run
-  `ynotes reindex`, which rebuilds the cache from your notes (the source of
-  truth) in one command. No note is ever lost in the process.
+The store auto-writes a `.ynotes/.gitattributes` with two rules, requiring zero
+per-clone setup:
+
+- `index/by-path.json merge=union` — the index is a union-mergeable JSONL
+  cache, so concurrent note-adds on parallel branches merge into a valid index
+  with no conflicts.
+- `notes/** -merge` — note files are never textually merged by git. A
+  concurrent edit cannot inject conflict markers and corrupt the JSON.
+
+**Two devs adding different notes** merge cleanly; nothing is lost.
+
+**Two devs reanchoring/updating the same note, or saving the same note**
+produces a git conflict on the note files (rename/rename or add/add, because
+git sees two versions of the same path). The files stay valid JSON. Resolve by
+keeping both (`git add .ynotes/`), commit, then run `ynotes reanchor`. Because
+the id is a content hash, two copies that re-anchor to the same place get the
+same id and collapse into one note automatically.
+
+**Recovery.** If the index is ever malformed or missing, `ynotes reindex`
+rebuilds it from `notes/` (the source of truth) in one command. It no longer
+refuses on a mangled index, and a missing index is reported rather than
+silently read as "no notes". One caveat: do not run `ynotes reindex`
+mid-merge (before resolving), as writing the index while git is mid-merge
+complicates `git merge --abort`; resolve the merge first.
 
 Workflow: commit `.ynotes/`, push, and merge like any other change.
 

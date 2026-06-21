@@ -121,6 +121,10 @@ pub(crate) enum Command {
     /// over `(target, scope, bundle, body)`, and the bundle just changed).
     /// To track a note across reanchors, use `(target, scope, body)` as
     /// the stable lineage rather than caching the id.
+    ///
+    /// Re-anchoring is also the post-merge dedup pass: two copies of the same
+    /// note that a concurrent merge left behind collapse into one when they
+    /// re-anchor to the same place (identical bundle => identical id).
     Reanchor {
         /// Show what would change without writing anything.
         #[arg(long)]
