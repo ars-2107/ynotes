@@ -556,6 +556,39 @@ fn a_stray_non_fanout_dir_does_not_trigger_a_false_index_missing() {
         .success();
 }
 
+/// A write into a store whose index was deleted (notes still on disk) must
+/// refuse with the reindex hint rather than silently rebuild a half-correct
+/// index that omits the surviving notes. `read_index` backs the write paths,
+/// so the `IndexMissing` guard reaches `save` too (invariant #4).
+#[test]
+fn a_save_into_a_store_with_a_deleted_index_errors_with_a_reindex_hint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("f.rs"), "a\nb\nc\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.rs", "1", "-m", "first"])
+        .assert()
+        .success();
+    std::fs::remove_file(dir.path().join(".ynotes/index/by-path.json")).unwrap();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.rs", "2", "-m", "second"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("reindex"),
+        "a save into a deleted-index store must hint at reindex: {stderr}"
+    );
+}
+
 /// `reindex` is the documented recovery path, so it must run even when the
 /// existing index is unreadable — the notes on disk are the source of truth.
 /// Both raw garbage and git conflict markers must be recoverable.

@@ -722,6 +722,17 @@ impl Store {
         })
     }
 
+    /// Reads and parses the by-path index from disk.
+    ///
+    /// `IndexMissing` (raised when the index file is absent but notes still exist
+    /// on disk) propagates to every caller, including the write paths (`save`,
+    /// `reanchor`, `delete`, `update`) — so a write into a deleted-index-with-notes
+    /// store refuses with the "run `ynotes reindex`" hint rather than silently
+    /// rebuilding a half-correct index that omits surviving notes. This is a
+    /// deliberate strengthening of invariant #4 (user context is never silently
+    /// dropped); `reindex` is the sole recovery path and is exempt because it
+    /// treats `IndexMissing` as an empty baseline to rebuild from, not as an
+    /// error.
     fn read_index(&self) -> Result<IndexMap> {
         let path = self.index_path();
         let bytes = match std::fs::read(&path) {
