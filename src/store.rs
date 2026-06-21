@@ -539,7 +539,7 @@ impl Store {
             // I/O failure still propagates.
             let previous: std::collections::BTreeSet<String> = match self.read_index() {
                 Ok(index) => index.into_values().flatten().collect(),
-                Err(Error::IndexMalformed { .. }) | Err(Error::IndexMissing { .. }) => {
+                Err(Error::IndexMalformed { .. } | Error::IndexMissing { .. }) => {
                     tracing::warn!("existing index is unreadable; rebuilding from notes/");
                     std::collections::BTreeSet::new()
                 }

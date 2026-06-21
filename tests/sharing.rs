@@ -225,6 +225,7 @@ fn reindex_preserves_a_custom_driver_and_ensures_the_notes_guard() {
 /// detection is unavoidable via attributes), so we resolve by keeping both valid
 /// files and let `reanchor` collapse the same-lineage duplicates to one note.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_concurrent_reanchor_merge_keeps_notes_valid_and_reanchor_dedups() {
     fn git(dir: &std::path::Path, args: &[&str]) {
         let status = std::process::Command::new("git")
@@ -491,7 +492,7 @@ fn a_missing_index_with_notes_is_not_silently_empty() {
 }
 
 /// A genuinely empty store whose index file is absent stays an empty result —
-/// the new IndexMissing signal must fire only when notes actually exist.
+/// the new `IndexMissing` signal must fire only when notes actually exist.
 #[test]
 fn an_empty_store_with_missing_index_is_still_empty() {
     let dir = tempfile::tempdir().expect("tempdir");

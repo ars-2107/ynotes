@@ -43,7 +43,7 @@ fn json_contract_is_stable_and_id_is_deterministic() {
     insta::assert_snapshot!(save_json.trim(), @r#"
     {
       "success": true,
-      "v": 6,
+      "v": 7,
       "data": {
         "id": "23df0ca3934b6b67a004dbaa21c5daf668869bee013d55f5b6f7768fabfd5ae0",
         "target": "code.rs",
@@ -66,7 +66,7 @@ fn json_contract_is_stable_and_id_is_deterministic() {
     insta::assert_snapshot!(query_json.trim(), @r#"
     {
       "success": true,
-      "v": 6,
+      "v": 7,
       "data": {
         "query": {
           "file": "code.rs",
@@ -121,7 +121,7 @@ fn save_json_escapes_a_special_character_in_the_target_path() {
     let parsed: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("save --json must emit valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(6));
+    assert_eq!(parsed["v"], serde_json::json!(7));
     assert_eq!(parsed["data"]["target"], serde_json::json!(name));
     assert_eq!(parsed["data"]["created"], serde_json::json!(true));
 }
@@ -151,7 +151,7 @@ fn query_json_emits_failure_envelope_on_invalid_input() {
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("--json must always emit valid JSON, even on failure");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(6));
+    assert_eq!(parsed["v"], serde_json::json!(7));
     assert_eq!(parsed["type"], serde_json::json!("engine"));
     assert!(
         parsed["error"]
@@ -189,7 +189,7 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     insta::assert_snapshot!(empty_json.trim(), @r#"
     {
       "success": true,
-      "v": 6,
+      "v": 7,
       "data": {
         "dry_run": false,
         "changed": [],
@@ -227,7 +227,7 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(6));
+    assert_eq!(parsed["v"], serde_json::json!(7));
     let data = &parsed["data"];
     assert_eq!(data["dry_run"], serde_json::json!(false));
     assert_eq!(data["changed"].as_array().unwrap().len(), 0);
@@ -268,7 +268,7 @@ fn reindex_json_envelope_is_stable_on_a_healthy_store() {
     insta::assert_snapshot!(reindex_json.trim(), @r#"
     {
       "success": true,
-      "v": 6,
+      "v": 7,
       "data": {
         "dry_run": false,
         "scanned": 1,
@@ -276,6 +276,67 @@ fn reindex_json_envelope_is_stable_on_a_healthy_store() {
         "recovered": [],
         "dangling": [],
         "malformed": []
+      }
+    }
+    "#);
+}
+
+/// `lookup --json` is the stable-handle scripting surface (the contract added
+/// in `v7`). Snapshot the single-match case — one anchored note filtered by
+/// `--target` and `--body-contains` — since the shape is fully deterministic
+/// (the note id is content-addressed). The no-match path (exit 0, empty array)
+/// is covered behaviourally in `tests/lookup.rs`.
+///
+/// Version history: v3 collapsed `Line`/`Range`; v4 added the envelope; v5
+/// unified `query` arrays; v6 added the `reindex` payload; v7 added the
+/// `lookup` payload.
+#[test]
+fn lookup_json_contract_is_stable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\nfn target() {}\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "2", "-m", "load-bearing"])
+        .assert()
+        .success();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args([
+            "lookup",
+            "--target",
+            "code.rs",
+            "--body-contains",
+            "load",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let json = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    insta::assert_snapshot!(json.trim(), @r#"
+    {
+      "success": true,
+      "v": 7,
+      "data": {
+        "notes": [
+          {
+            "id": "8437defee41c33e0744a97b522aa303786b55ed9c362f673dd528521f9516f73",
+            "target": "code.rs",
+            "scope": "range",
+            "status": "anchored",
+            "stale": false,
+            "resolved_range": [
+              2,
+              2
+            ],
+            "body": "load-bearing"
+          }
+        ]
       }
     }
     "#);

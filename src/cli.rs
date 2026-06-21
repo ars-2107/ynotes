@@ -90,6 +90,27 @@ pub(crate) enum Command {
         json: bool,
     },
 
+    /// Find note(s) by a stable handle and print their current id(s).
+    ///
+    /// A note's id is a content hash over its anchor, so it rotates on every
+    /// `reanchor`/`update` (and on a re-`save` after a commit). To reference a
+    /// note durably (a PR description, a code comment), record the
+    /// `(target, body)` it is about and resolve it back to the live id with
+    /// this command. At least one of `--target`/`--body-contains` is required.
+    Lookup {
+        /// Restrict to a file or directory (store-relative, like `list`).
+        #[arg(long, value_name = "PATH")]
+        target: Option<PathBuf>,
+
+        /// Keep only notes whose body contains this substring (case-sensitive).
+        #[arg(long, value_name = "TEXT")]
+        body_contains: Option<String>,
+
+        /// Emit machine-readable JSON instead of the text format.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Refresh selectors for high-confidence notes.
     ///
     /// A read never writes; this is the deliberate, auditable pass that

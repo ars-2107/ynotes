@@ -3,7 +3,12 @@
 
 use std::path::Path;
 
+use assert_cmd::Command;
 use ynotes::{LineRange, Note, Scope, SelectorBundle, SourceFile, Store, lookup};
+
+fn yn() -> Command {
+    Command::cargo_bin("ynotes").expect("cargo test builds the binary")
+}
 
 /// Saves a Range note for `range` of the file at `abs` (mirrors the helper in
 /// tests/reanchor.rs).
@@ -64,4 +69,41 @@ fn lookup_filters_by_target_and_body_substring() {
     // case-sensitive: no match for a different case.
     let none = lookup(&store, None, Some("TOKEN REFRESH")).unwrap();
     assert!(none.is_empty(), "body match is case-sensitive");
+}
+
+#[test]
+fn lookup_requires_a_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    yn().current_dir(dir.path()).arg("init").assert().success();
+    yn().current_dir(dir.path())
+        .arg("lookup")
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn lookup_finds_by_body_and_exits_zero_on_no_match() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.rs"), "a\nb\nc\n").unwrap();
+    yn().current_dir(dir.path()).arg("init").assert().success();
+    yn().current_dir(dir.path())
+        .args(["save", "f.rs", "2", "-m", "find this body"])
+        .assert()
+        .success();
+
+    // Match: the id is printed.
+    let out = yn()
+        .current_dir(dir.path())
+        .args(["lookup", "--body-contains", "find this", "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["data"]["notes"].as_array().unwrap().len(), 1);
+
+    // No match: still exit 0 (it is a query, not an error).
+    yn().current_dir(dir.path())
+        .args(["lookup", "--body-contains", "no such text"])
+        .assert()
+        .success();
 }

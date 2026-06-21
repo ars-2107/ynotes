@@ -11,6 +11,7 @@ pub(crate) mod id;
 pub(crate) mod init;
 pub(crate) mod json_envelope;
 pub(crate) mod list;
+pub(crate) mod lookup;
 pub(crate) mod prune;
 pub(crate) mod query;
 pub(crate) mod reanchor;
@@ -45,6 +46,11 @@ pub(crate) fn dispatch(cli: &Cli) -> Result<(), CommandError> {
             explain,
         } => query::run(file, at.as_deref(), *json, *explain),
         Command::List { file, json } => list::run(file.as_deref(), *json),
+        Command::Lookup {
+            target,
+            body_contains,
+            json,
+        } => lookup::run(target.as_deref(), body_contains.as_deref(), *json),
         Command::Reanchor { dry_run, json } => reanchor::run(*dry_run, *json),
         Command::Update { id, message, json } => update::run(id, message.as_deref(), *json),
         Command::Delete { ids, dry_run, json } => delete::run(ids, *dry_run, *json),

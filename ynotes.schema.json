@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ars-2107/ynotes/main/ynotes.schema.json",
   "title": "ynotes --json output",
-  "description": "The machine-facing contract for every `ynotes <cmd> --json` output (`save`, `query`, `list`, `update`, `delete`, `prune`, `reanchor`, `reindex`, `doctor`). Every shape rides inside the same envelope: `{success: bool, v: int, …}` — `data` on success, `error`+`type` on failure. The envelope is emitted on stdout regardless of exit code, so a JSON consumer never has to branch on `$?` to parse the response. This is a stable, versioned agent contract: `v` is bumped whenever a field changes and mirrored in tests/agent_contract.rs. See AGENTS.md invariant 7.",
+  "description": "The machine-facing contract for every `ynotes <cmd> --json` output (`save`, `query`, `list`, `update`, `delete`, `prune`, `reanchor`, `reindex`, `doctor`, `lookup`). Every shape rides inside the same envelope: `{success: bool, v: int, …}` — `data` on success, `error`+`type` on failure. The envelope is emitted on stdout regardless of exit code, so a JSON consumer never has to branch on `$?` to parse the response. This is a stable, versioned agent contract: `v` is bumped whenever a field changes and mirrored in tests/agent_contract.rs. See AGENTS.md invariant 7.",
   "oneOf": [
     { "$ref": "#/$defs/successEnvelope" },
     { "$ref": "#/$defs/failureEnvelope" }
@@ -27,7 +27,8 @@
             { "$ref": "#/$defs/pruneData" },
             { "$ref": "#/$defs/reanchorData" },
             { "$ref": "#/$defs/reindexData" },
-            { "$ref": "#/$defs/doctorData" }
+            { "$ref": "#/$defs/doctorData" },
+            { "$ref": "#/$defs/lookupData" }
           ]
         }
       }
@@ -415,6 +416,20 @@
         }
       }
     },
+    "lookupData": {
+      "type": "object",
+      "title": "lookup --json data",
+      "description": "Payload for `ynotes lookup --json`: the notes matching a stable (target, body) handle, each with its current id and anchor status. Use this to re-derive a note's live id, which rotates on reanchor/update.",
+      "additionalProperties": false,
+      "required": ["notes"],
+      "properties": {
+        "notes": {
+          "type": "array",
+          "description": "Every note matching the lookup filters, in list order. Empty when nothing matched (exit 0).",
+          "items": { "$ref": "#/$defs/note" }
+        }
+      }
+    },
     "note": {
       "type": "object",
       "title": "Resolved note",
@@ -509,8 +524,8 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "const": 6,
-      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
+      "const": 7,
+      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
     },
     "lineRange": {
       "type": "array",

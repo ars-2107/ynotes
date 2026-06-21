@@ -1,9 +1,9 @@
 //! Shared envelope for every `--json` output.
 //!
-//! Shape (`v: 6` of the agent contract):
+//! Shape (`v: 7` of the agent contract):
 //!
-//! - success: `{"success": true, "v": 6, "data": <command payload>}`
-//! - failure: `{"success": false, "v": 6, "error": "<message>", "type": "<kind>"}`
+//! - success: `{"success": true, "v": 7, "data": <command payload>}`
+//! - failure: `{"success": false, "v": 7, "error": "<message>", "type": "<kind>"}`
 //!
 //! Both shapes are emitted to **stdout**, including the failure case — a
 //! JSON-typed consumer never has to branch on the exit code to parse the
@@ -22,7 +22,7 @@ use crate::command_error::CommandError;
 /// The current `--json` contract version. Bumped when any field changes;
 /// mirrored in `tests/agent_contract.rs` and `ynotes.schema.json`
 /// (invariant #7).
-pub(crate) const CONTRACT_VERSION: u8 = 6;
+pub(crate) const CONTRACT_VERSION: u8 = 7;
 
 /// The success envelope: `{success: true, v: N, data: <payload>}`. Declared
 /// as a struct (not built with `json!`) so serde preserves the field order
@@ -74,7 +74,7 @@ pub(crate) fn print_error(message: &str, kind: ErrorKind) {
         kind: kind.as_str(),
     };
     let line = serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| {
-        r#"{"success":false,"v":6,"error":"failed to render JSON error envelope","type":"render"}"#
+        r#"{"success":false,"v":7,"error":"failed to render JSON error envelope","type":"render"}"#
             .to_string()
     });
     // Best-effort write — a broken pipe here is unrecoverable and the exit
