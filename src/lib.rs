@@ -50,7 +50,7 @@ pub use anchor::{AnchorStatus, Resolution, Rung, RungOutcome, RungResult, resolv
 pub use error::{Error, Result};
 pub use git::{GitContext, git_version};
 pub use note::{Note, Scope};
-pub use query::{LineSpec, QueryResult, ResolvedNote, list, query};
+pub use query::{LineSpec, QueryResult, ResolvedNote, list, lookup, query};
 pub use reanchor::{ReanchorChange, ReanchorReport, ReanchorSkip, ReanchorSkipReason, reanchor};
 pub use selector::{GitSelector, SCHEMA, SelectorBundle};
 pub use source::{LineRange, SourceFile};

@@ -221,6 +221,40 @@ pub fn list(store: &Store, only: Option<&Path>) -> Result<Vec<ResolvedNote>> {
     Ok(out)
 }
 
+/// Resolve the stable `(target, body)` handle to the matching notes, each with
+/// its current anchor status. The reader half of the stable-handle story: a
+/// note's id rotates whenever it is re-anchored or updated (the id is
+/// content-hashed over the bundle), and even a re-`save` after a commit rotates
+/// it (the git selector advances), so an externally-recorded id goes stale.
+/// `lookup` finds the live note(s) from the parts that persist — the target
+/// path and the body text.
+///
+/// `target` filters by file or directory exactly as [`list`] does;
+/// `body_contains`, when given, keeps only notes whose body contains the
+/// substring (case-sensitive — code context is case-significant). With both
+/// `None` the result is every note in the store; the binary requires at least
+/// one filter, but the engine stays permissive for programmatic callers.
+///
+/// Read-only: like [`list`] and [`query`] it resolves but never writes
+/// (invariant #8).
+///
+/// # Errors
+///
+/// As [`list`]: [`Error::Invalid`] if `target` is outside the store, or
+/// [`Error::Io`] / [`Error::Invalid`] if the index or a note record cannot be
+/// read.
+pub fn lookup(
+    store: &Store,
+    target: Option<&Path>,
+    body_contains: Option<&str>,
+) -> Result<Vec<ResolvedNote>> {
+    let mut notes = list(store, target)?;
+    if let Some(needle) = body_contains {
+        notes.retain(|rn| rn.note.body.contains(needle));
+    }
+    Ok(notes)
+}
+
 /// Whether a resolved (non-orphan) note satisfies the query interval under
 /// its scope. File-scoped notes always match; range/line-scoped notes match
 /// on overlap (a whole-file query — `interval == None` — matches all).
