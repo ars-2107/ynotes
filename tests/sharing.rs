@@ -458,6 +458,81 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
     );
 }
 
+/// A deleted index while notes sit on disk must NOT read as "no notes" — that is
+/// indistinguishable from an empty store and looks like total data loss. It must
+/// fail loudly with a reindex hint, like the malformed case.
+#[test]
+fn a_missing_index_with_notes_is_not_silently_empty() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("f.rs"), "a\nb\nc\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.rs", "2", "-m", "still here"])
+        .assert()
+        .success();
+    std::fs::remove_file(dir.path().join(".ynotes/index/by-path.json")).unwrap();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .arg("list")
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("reindex"),
+        "a missing index with notes on disk must hint at reindex, not report empty: {stderr}"
+    );
+}
+
+/// A genuinely empty store whose index file is absent stays an empty result —
+/// the new IndexMissing signal must fire only when notes actually exist.
+#[test]
+fn an_empty_store_with_missing_index_is_still_empty() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::remove_file(dir.path().join(".ynotes/index/by-path.json")).unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("list")
+        .assert()
+        .success();
+}
+
+/// reindex must recover a missing index just as it recovers a malformed one.
+#[test]
+fn reindex_recovers_a_missing_index() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("f.rs"), "a\nb\nc\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.rs", "2", "-m", "recover me"])
+        .assert()
+        .success();
+    std::fs::remove_file(dir.path().join(".ynotes/index/by-path.json")).unwrap();
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["reindex", "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["data"]["indexed"], serde_json::json!(1));
+}
+
 /// `reindex` is the documented recovery path, so it must run even when the
 /// existing index is unreadable — the notes on disk are the source of truth.
 /// Both raw garbage and git conflict markers must be recoverable.

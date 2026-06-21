@@ -99,4 +99,14 @@ pub enum Error {
         /// The index file that failed to parse.
         path: PathBuf,
     },
+
+    /// The by-path index file is absent while `notes/` holds records — the cache
+    /// was deleted or a merge removed it, but the notes survive. Distinct from
+    /// "empty store" (no notes), which is not an error. The index is
+    /// rebuildable, so the remedy rides in the message, like [`Error::IndexMalformed`].
+    #[error("index `{}` is missing; run `ynotes reindex` to rebuild it from your notes", path.display())]
+    IndexMissing {
+        /// The index file that was expected but absent.
+        path: PathBuf,
+    },
 }

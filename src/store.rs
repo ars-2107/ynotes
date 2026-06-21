@@ -539,8 +539,8 @@ impl Store {
             // I/O failure still propagates.
             let previous: std::collections::BTreeSet<String> = match self.read_index() {
                 Ok(index) => index.into_values().flatten().collect(),
-                Err(Error::IndexMalformed { .. }) => {
-                    tracing::warn!("existing index is malformed; rebuilding from notes/");
+                Err(Error::IndexMalformed { .. }) | Err(Error::IndexMissing { .. }) => {
+                    tracing::warn!("existing index is unreadable; rebuilding from notes/");
                     std::collections::BTreeSet::new()
                 }
                 Err(other) => return Err(other),
@@ -657,6 +657,29 @@ impl Store {
         self.root.join("notes")
     }
 
+    /// Whether `notes/` holds at least one note record on disk. Used to tell a
+    /// deleted index (notes still present — a recoverable problem) from a
+    /// genuinely empty store (no notes — not a problem). Best-effort: any read
+    /// error means "treat as empty", so this can never turn a transient I/O
+    /// hiccup into a false `IndexMissing`.
+    fn has_note_records(&self) -> bool {
+        let Ok(prefixes) = std::fs::read_dir(self.notes_dir()) else {
+            return false;
+        };
+        for prefix in prefixes.flatten() {
+            if prefix.path().is_dir() {
+                if let Ok(files) = std::fs::read_dir(prefix.path()) {
+                    for f in files.flatten() {
+                        if f.path().extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     fn index_dir(&self) -> PathBuf {
         self.root.join("index")
     }
@@ -703,6 +726,13 @@ impl Store {
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                // A missing index over a non-empty `notes/` is recoverable
+                // corruption, not emptiness: surface it so reads do not read as
+                // "no notes" (silent apparent data loss). An empty store legitimately
+                // has no records, so it stays an empty result.
+                if self.has_note_records() {
+                    return Err(Error::IndexMissing { path });
+                }
                 return Ok(IndexMap::new());
             }
             Err(source) => return Err(Error::Io { path, source }),
