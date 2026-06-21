@@ -667,7 +667,8 @@ impl Store {
             return false;
         };
         for prefix in prefixes.flatten() {
-            if prefix.path().is_dir() {
+            let name = prefix.file_name();
+            if name.to_string_lossy().len() == 2 && prefix.path().is_dir() {
                 if let Ok(files) = std::fs::read_dir(prefix.path()) {
                     for f in files.flatten() {
                         if f.path().extension().and_then(std::ffi::OsStr::to_str) == Some("json") {

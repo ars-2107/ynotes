@@ -533,6 +533,28 @@ fn reindex_recovers_a_missing_index() {
     assert_eq!(v["data"]["indexed"], serde_json::json!(1));
 }
 
+/// A stray non-fan-out directory under `notes/` must not be mistaken for a note
+/// record: a missing index over a store with no real notes still reads as empty.
+#[test]
+fn a_stray_non_fanout_dir_does_not_trigger_a_false_index_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    // A non-fan-out directory (name is not 2 chars) holding a json file.
+    let stray = dir.path().join(".ynotes/notes/scratch");
+    std::fs::create_dir_all(&stray).unwrap();
+    std::fs::write(stray.join("foo.json"), "{}").unwrap();
+    std::fs::remove_file(dir.path().join(".ynotes/index/by-path.json")).unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .arg("list")
+        .assert()
+        .success();
+}
+
 /// `reindex` is the documented recovery path, so it must run even when the
 /// existing index is unreadable — the notes on disk are the source of truth.
 /// Both raw garbage and git conflict markers must be recoverable.
