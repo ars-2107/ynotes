@@ -1090,9 +1090,9 @@ fn clap_usage_error_without_json_keeps_stderr_diagnostic() {
 }
 
 /// The index is a cache; `reindex` must be able to rebuild it from the notes
-/// on disk. Delete the index entirely, confirm the note has gone missing to a
-/// query (the index is how a query finds it), then `reindex` and confirm the
-/// note is anchored again. This is the recovery path behind the "run a
+/// on disk. Delete the index entirely, confirm the query reports the index is
+/// missing and directs the user to run `reindex`, then `reindex` and confirm
+/// the note is anchored again. This is the recovery path behind the "run a
 /// reindex" advisory.
 #[test]
 fn reindex_rebuilds_a_deleted_index() {
@@ -1112,14 +1112,17 @@ fn reindex_rebuilds_a_deleted_index() {
     // Obliterate the index. The note file under `notes/` is untouched.
     std::fs::remove_file(dir.path().join(".ynotes/index/by-path.json")).unwrap();
 
-    // With no index, the query cannot find the note (the never-drop promise is
-    // about resolution, not a missing index — the note is simply unindexed).
+    // A deleted index over a surviving note is now surfaced as an error that
+    // directs the user to reindex, not silently reported as "no notes" (which
+    // looked like data loss). The note file under notes/ is intact; the index
+    // just needs rebuilding.
     ynotes()
         .current_dir(dir.path())
         .args(["query", "code.rs", "1"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("no notes"));
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("reindex"));
 
     // Reindex rebuilds the pointer from disk: one note scanned, one recovered.
     let out = ynotes()
@@ -1176,12 +1179,15 @@ fn reindex_dry_run_writes_nothing() {
         !dir.path().join(".ynotes/index/by-path.json").exists(),
         "a dry run must not write the index"
     );
+    // The dry run wrote nothing, so the index is still missing — a query
+    // surfaces that (exit 1, "run reindex") rather than silently saying "no notes".
     ynotes()
         .current_dir(dir.path())
         .args(["query", "code.rs", "1"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("no notes"));
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("reindex"));
 }
 
 /// An index pointer with no note file behind it is dangling. `reindex` drops
