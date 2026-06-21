@@ -532,8 +532,19 @@ impl Store {
     /// [`ReindexReport::malformed`], not surfaced as an error.
     pub fn reindex(&self, dry_run: bool) -> Result<ReindexReport> {
         self.with_index_lock(|| {
-            let previous: std::collections::BTreeSet<String> =
-                self.read_index()?.into_values().flatten().collect();
+            // The notes on disk are the source of truth; reindex must run even
+            // when the cache it is rebuilding is itself unreadable (a mangled
+            // merge, a hand-edit). A malformed index is treated as an empty
+            // baseline so every on-disk note shows up as `recovered`; a genuine
+            // I/O failure still propagates.
+            let previous: std::collections::BTreeSet<String> = match self.read_index() {
+                Ok(index) => index.into_values().flatten().collect(),
+                Err(Error::IndexMalformed { .. }) => {
+                    tracing::warn!("existing index is malformed; rebuilding from notes/");
+                    std::collections::BTreeSet::new()
+                }
+                Err(other) => return Err(other),
+            };
 
             let mut rebuilt = IndexMap::new();
             // The distinct ids seen on disk. Doubles as the dedup guard during

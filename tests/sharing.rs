@@ -457,3 +457,47 @@ fn a_concurrent_add_merge_stays_valid_and_loses_no_note() {
         "nothing dangling"
     );
 }
+
+/// `reindex` is the documented recovery path, so it must run even when the
+/// existing index is unreadable — the notes on disk are the source of truth.
+/// Both raw garbage and git conflict markers must be recoverable.
+#[test]
+fn reindex_recovers_a_malformed_index() {
+    for corruption in [
+        "this is not json at all\n",
+        "<<<<<<< HEAD\n{}\n=======\n>>>>>>> x\n",
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("f.rs"), "a\nb\nc\n").unwrap();
+        ynotes()
+            .current_dir(dir.path())
+            .arg("init")
+            .assert()
+            .success();
+        ynotes()
+            .current_dir(dir.path())
+            .args(["save", "f.rs", "2", "-m", "keep me"])
+            .assert()
+            .success();
+        std::fs::write(dir.path().join(".ynotes/index/by-path.json"), corruption).unwrap();
+
+        let out = ynotes()
+            .current_dir(dir.path())
+            .args(["reindex", "--json"])
+            .assert()
+            .success();
+        let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+        assert_eq!(
+            v["data"]["indexed"],
+            serde_json::json!(1),
+            "reindex must rebuild the index from notes/ despite corruption: {corruption:?}"
+        );
+
+        // The store is queryable again.
+        ynotes()
+            .current_dir(dir.path())
+            .arg("list")
+            .assert()
+            .success();
+    }
+}
