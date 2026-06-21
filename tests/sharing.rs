@@ -123,6 +123,10 @@ fn init_writes_git_integration_files() {
         attrs.contains("index/by-path.json merge=union"),
         "gitattributes must set the union driver: {attrs}"
     );
+    assert!(
+        attrs.contains("notes/** -merge"),
+        "gitattributes must guard note files from textual merge: {attrs}"
+    );
     let ignore = std::fs::read_to_string(dir.path().join(".ynotes/.gitignore")).unwrap();
     assert_eq!(
         ignore, "lock\n",
@@ -175,9 +179,11 @@ fn reindex_dry_run_does_not_write_git_integration_files() {
     );
 }
 
-/// A user-customised git-integration file is never clobbered.
+/// A user who pins their own driver for a pattern keeps it (we never override a
+/// pattern the user already addressed), and a store predating the note-merge
+/// guard gains `notes/** -merge` on the next reindex. User content is preserved.
 #[test]
-fn reindex_does_not_clobber_a_customised_gitattributes() {
+fn reindex_preserves_a_custom_driver_and_ensures_the_notes_guard() {
     let dir = tempfile::tempdir().expect("tempdir");
     ynotes()
         .current_dir(dir.path())
@@ -185,16 +191,158 @@ fn reindex_does_not_clobber_a_customised_gitattributes() {
         .assert()
         .success();
     let path = dir.path().join(".ynotes/.gitattributes");
-    std::fs::write(&path, "# custom\n").unwrap();
+    std::fs::write(&path, "# my rules\nindex/by-path.json merge=mine\n").unwrap();
     ynotes()
         .current_dir(dir.path())
         .arg("reindex")
         .assert()
         .success();
+    let attrs = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        attrs.contains("index/by-path.json merge=mine"),
+        "a custom index driver is preserved: {attrs}"
+    );
+    assert!(
+        !attrs.contains("index/by-path.json merge=union"),
+        "we must not add a second, conflicting index line: {attrs}"
+    );
+    assert!(
+        attrs.contains("notes/** -merge"),
+        "the notes guard is ensured even on a customised file: {attrs}"
+    );
+    assert!(
+        attrs.contains("# my rules"),
+        "the user's own content is preserved: {attrs}"
+    );
+}
+
+/// The case the README invites and sub-project 1 missed: two teammates reanchor
+/// the *same* note on two branches, then merge. `reanchor` is delete-old +
+/// add-new, which git's rename detection turns into a rename/rename conflict and
+/// (without `notes/** -merge`) a *textual* merge that injects conflict markers
+/// into the content-addressed note JSON, corrupting the whole store. With the
+/// guard the note files stay valid JSON; the merge still conflicts (rename
+/// detection is unavoidable via attributes), so we resolve by keeping both valid
+/// files and let `reanchor` collapse the same-lineage duplicates to one note.
+#[test]
+fn a_concurrent_reanchor_merge_keeps_notes_valid_and_reanchor_dedups() {
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
+    }
+    fn note_files(repo: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let notes = repo.join(".ynotes/notes");
+        for prefix in std::fs::read_dir(&notes).expect("notes dir") {
+            let p = prefix.unwrap().path();
+            if p.is_dir() {
+                for f in std::fs::read_dir(&p).unwrap() {
+                    let f = f.unwrap().path();
+                    if f.extension().and_then(|e| e.to_str()) == Some("json") {
+                        out.push(f);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path();
+    git(repo, &["init", "-q"]);
+    git(repo, &["config", "user.email", "t@t"]);
+    git(repo, &["config", "user.name", "t"]);
+    std::fs::write(repo.join("f.rs"), "a\nb\nTARGET\nd\ne\n").unwrap();
+    ynotes().current_dir(repo).arg("init").assert().success();
+    ynotes()
+        .current_dir(repo)
+        .args(["save", "f.rs", "3", "-m", "note about TARGET"])
+        .assert()
+        .success();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "base"]);
+
+    let base = {
+        let out = std::process::Command::new("git")
+            .current_dir(repo)
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+
+    // Branch A: insert one line so TARGET moves; reanchor.
+    git(repo, &["checkout", "-q", "-b", "a"]);
+    std::fs::write(repo.join("f.rs"), "AAA\na\nb\nTARGET\nd\ne\n").unwrap();
+    ynotes()
+        .current_dir(repo)
+        .arg("reanchor")
+        .assert()
+        .success();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "a"]);
+
+    // Branch B from base: insert two different lines; reanchor.
+    git(repo, &["checkout", "-q", &base]);
+    git(repo, &["checkout", "-q", "-b", "b"]);
+    std::fs::write(repo.join("f.rs"), "BBB\nCCC\na\nb\nTARGET\nd\ne\n").unwrap();
+    ynotes()
+        .current_dir(repo)
+        .arg("reanchor")
+        .assert()
+        .success();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "b"]);
+
+    // Merge A into B. A rename/rename conflict is EXPECTED — we do not assert
+    // success; we assert the note files were not corrupted.
+    git(repo, &["checkout", "-q", "b"]);
+    drop(
+        std::process::Command::new("git")
+            .current_dir(repo)
+            .args(["merge", "--no-edit", "a"])
+            .output()
+            .expect("git merge runs"),
+    );
+
+    for f in note_files(repo) {
+        let s = std::fs::read_to_string(&f).unwrap();
+        assert!(
+            !s.contains("<<<<<<<") && !s.contains(">>>>>>>") && !s.contains("======="),
+            "note file {f:?} was corrupted with conflict markers:\n{s}"
+        );
+        serde_json::from_str::<serde_json::Value>(&s)
+            .unwrap_or_else(|e| panic!("note file {f:?} is not valid JSON: {e}\n{s}"));
+    }
+
+    // Resolve: settle the source to one merged state and keep both valid notes.
+    std::fs::write(repo.join("f.rs"), "AAA\nBBB\nCCC\na\nb\nTARGET\nd\ne\n").unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "merged"]);
+
+    // The store is readable after the merge (no corruption).
+    ynotes().current_dir(repo).arg("list").assert().success();
+
+    // reanchor collapses the same-lineage duplicates to a single note.
+    ynotes()
+        .current_dir(repo)
+        .arg("reanchor")
+        .assert()
+        .success();
+    let out = ynotes()
+        .current_dir(repo)
+        .args(["list", "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
     assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        "# custom\n",
-        "reindex must not clobber a customised file"
+        v["data"]["notes"].as_array().unwrap().len(),
+        1,
+        "reanchor must collapse the post-merge duplicates to one note"
     );
 }
 

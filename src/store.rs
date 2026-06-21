@@ -39,14 +39,45 @@ const HEAD_CONTENTS: &str = "ynotes 1\n";
 /// lose each other's entries.
 const LOCK_FILENAME: &str = "lock";
 
-/// Contents of `.ynotes/.gitattributes`: makes the by-path index cache
-/// union-mergeable. `union` is a git built-in driver, so this needs no
-/// per-clone `.git/config` setup. The pattern is relative to `.ynotes/`.
-const GITATTRIBUTES_CONTENTS: &str = "index/by-path.json merge=union\n";
+/// One managed line in a store git-config file: the path/pattern it governs and
+/// the exact line we write. We append a managed line only when no existing line
+/// already targets its `pattern`, so a user who customised the driver for a
+/// pattern keeps their version, while a store missing a managed line (e.g. one
+/// created before the note-merge guard existed) gains it on the next
+/// `init`/`reindex`. Existing lines are never modified or reordered.
+struct ManagedLine {
+    /// First whitespace-delimited token of the line: the path/pattern the
+    /// attribute applies to. Any existing line starting with this token means
+    /// the user has an opinion we must not override.
+    pattern: &'static str,
+    /// The exact line (no trailing newline) appended when `pattern` is absent.
+    line: &'static str,
+}
 
-/// Contents of `.ynotes/.gitignore`: keeps the local advisory lock out of
+/// Managed `.ynotes/.gitattributes` lines. `merge=union` keeps the JSONL index
+/// cache mergeable; `notes/** -merge` stops git running a *textual* three-way
+/// merge on the content-addressed note files — without it, a concurrent
+/// supersede (reanchor/update) or identical save across branches lets git's
+/// rename detection inject conflict markers into note JSON, corrupting the
+/// store. `union` and `-merge` are git built-ins, so this needs no per-clone
+/// `.git/config`. Patterns are relative to `.ynotes/`.
+const GITATTRIBUTES_MANAGED: &[ManagedLine] = &[
+    ManagedLine {
+        pattern: "index/by-path.json",
+        line: "index/by-path.json merge=union",
+    },
+    ManagedLine {
+        pattern: "notes/**",
+        line: "notes/** -merge",
+    },
+];
+
+/// Managed `.ynotes/.gitignore` lines: keep the local advisory lock out of
 /// commits while the rest of the store is shared.
-const GITIGNORE_CONTENTS: &str = "lock\n";
+const GITIGNORE_MANAGED: &[ManagedLine] = &[ManagedLine {
+    pattern: "lock",
+    line: "lock",
+}];
 
 /// Environment variable that points directly at a `.ynotes` directory,
 /// bypassing the upward walk (`GIT_DIR` semantics — needed by a future
@@ -712,16 +743,15 @@ impl Store {
         Ok(map)
     }
 
-    /// Write the store's git-integration files (`.gitattributes`,
-    /// `.gitignore`) if absent. Idempotent and non-clobbering: a file the user
-    /// has customised is left untouched. These let a committed `.ynotes/` merge
-    /// cleanly with zero per-clone git setup.
+    /// Ensure the store's git-integration files carry their managed lines.
+    /// Idempotent and non-clobbering: a managed line is appended only when no
+    /// existing line targets its pattern, and existing lines are never changed.
+    /// This both equips a fresh store and upgrades one created before a managed
+    /// line existed (the `notes/** -merge` guard). Lets a committed `.ynotes/`
+    /// merge with zero per-clone git setup.
     fn write_git_config_files(&self) -> Result<()> {
-        write_file_noclobber(
-            &self.root.join(".gitattributes"),
-            GITATTRIBUTES_CONTENTS.as_bytes(),
-        )?;
-        write_file_noclobber(&self.root.join(".gitignore"), GITIGNORE_CONTENTS.as_bytes())?;
+        ensure_managed_lines(&self.root.join(".gitattributes"), GITATTRIBUTES_MANAGED)?;
+        ensure_managed_lines(&self.root.join(".gitignore"), GITIGNORE_MANAGED)?;
         Ok(())
     }
 
@@ -810,6 +840,43 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
         source: e.error,
     })?;
     Ok(())
+}
+
+/// Append any missing `managed` lines to `path`, leaving existing content
+/// untouched. A managed line is "present" when some non-empty existing line's
+/// first whitespace-delimited token equals its `pattern`. Writes only when at
+/// least one line is missing; creates the file (with all managed lines) if it
+/// does not exist. The whole file is rewritten atomically via [`write_file`].
+fn ensure_managed_lines(path: &Path, managed: &[ManagedLine]) -> Result<()> {
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(source) => {
+            return Err(Error::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let has_pattern = |pat: &str| {
+        existing
+            .lines()
+            .any(|l| l.split_whitespace().next() == Some(pat))
+    };
+    let missing: Vec<&ManagedLine> = managed.iter().filter(|m| !has_pattern(m.pattern)).collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut out = existing;
+    // Guarantee the appended block starts on its own line.
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    for m in missing {
+        out.push_str(m.line);
+        out.push('\n');
+    }
+    write_file(path, out.as_bytes())
 }
 
 /// Like [`write_file`] but refuses to overwrite — returns `Ok(false)` if
