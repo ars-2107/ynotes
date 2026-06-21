@@ -118,7 +118,7 @@ file in a week?* If yes, leave a note. If no, skip.
 ### How to drive it
 
 - **Always use `--json`.** Every JSON output rides inside the same envelope —
-  `{success: true, v: 6, data: …}` on success, `{success: false, v: 6,
+  `{success: true, v: 7, data: …}` on success, `{success: false, v: 7,
   error: …, type: …}` on failure — so a consumer always parses one shape
   and branches on `success`. The schema is versioned, snapshot-locked, and
   published as [`ynotes.schema.json`](ynotes.schema.json) (JSON Schema

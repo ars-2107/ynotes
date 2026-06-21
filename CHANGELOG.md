@@ -10,7 +10,7 @@ explicitly here.
 ## [Unreleased]
 
 ### Added
-- `ynotes lookup [--target <path>] [--body-contains <text>]` — resolve a stable
+- `ynotes lookup [--target <path>] [--body-contains <text>]`: resolve a stable
   `(target, body)` handle to a note's current id(s). `--json` payload `lookupData`.
 
 ### Fixed
@@ -83,7 +83,7 @@ explicitly here.
   contradicting the schema's promise that "the envelope is emitted on stdout
   regardless of exit code". The binary now parses with `try_parse` and, when
   `--json` was requested, renders the failure envelope
-  (`{"success": false, "v": 6, "type": "usage", …}`) to stdout and exits `2`.
+  (`{"success": false, "v": 7, "type": "usage", …}`) to stdout and exits `2`.
   `--help`/`--version` (successful outputs) and the non-`--json` human path are
   unchanged. No schema `v` bump from this fix — the failure-envelope shape is
   unchanged.
