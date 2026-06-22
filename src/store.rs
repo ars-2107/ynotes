@@ -541,9 +541,10 @@ impl Store {
     /// or that cannot be read or parsed, is skipped with a `tracing::warn!`,
     /// mirroring [`Store::notes_for`]'s posture: a corrupt record must not be
     /// able to sink a lookup. A consequence is that a *malformed* note cannot
-    /// be selected by id-prefix (it cannot be read to match) — `delete`/`update`
-    /// therefore cannot reach it; the remedy is `reindex` (or a manual fix),
-    /// and `doctor`/`reindex` surface that such a record exists.
+    /// be selected by id-*prefix* (it cannot be read to match), so `update` and
+    /// a prefix `delete` cannot reach it. Its removal path is
+    /// [`Store::purge_unreadable`], which `delete` invokes for an exact
+    /// 64-character id; `doctor`/`reindex` surface that such a record exists.
     ///
     /// # Errors
     ///
@@ -608,6 +609,82 @@ impl Store {
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(Error::Io { path, source }),
+        }
+    }
+
+    /// Purges an *unreadable* note record named by its exact content `id`: drops
+    /// any index pointer to it and unlinks the file. The deliberate removal path
+    /// for a corrupt record that [`Store::find_by_id_prefix`] cannot reach —
+    /// such a record cannot be parsed, so it cannot be matched by prefix, yet
+    /// its id is recoverable from its filename and is shown in `query`/`doctor`
+    /// output for exactly this purpose.
+    ///
+    /// Guarded two ways so it can never destroy a healthy note through this
+    /// preview-less path:
+    ///
+    /// - It acts only on the *exact* id: a short prefix maps to an on-disk
+    ///   record path that does not exist, so a prefix yields `Ok(false)`.
+    /// - It refuses a *readable* record: if the file parses as a valid note,
+    ///   this returns `Ok(false)` and removes nothing — a real note must go
+    ///   through `delete`, which shows what it is removing.
+    ///
+    /// Returns `Ok(true)` when an unreadable record was found at the id's path
+    /// (and, unless `dry_run`, removed), `Ok(false)` when no such record exists
+    /// or the file was actually readable. With `dry_run` the readability check
+    /// still runs but nothing is written.
+    ///
+    /// The de-index runs under the store's exclusive index lock, matching
+    /// [`Store::remove`]. The id's target is unknown (the file is unparseable),
+    /// so every target's id list is scanned. An index that is itself unreadable
+    /// is tolerated: a `reindex` rebuilds it and drops the now-dangling pointer,
+    /// so there is nothing to clean here.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the index or the record file cannot be written/removed,
+    /// or an index read error other than the rebuildable
+    /// [`Error::IndexMalformed`]/[`Error::IndexMissing`].
+    pub fn purge_unreadable(&self, id: &str, dry_run: bool) -> Result<bool> {
+        let path = self.note_path(id);
+        match Self::read_note_at(&path) {
+            // A readable note is not ours to purge — `delete` owns that, with a
+            // preview. Decline rather than bypass it.
+            Ok(_) => return Ok(false),
+            // No file at this exact id: nothing to purge (the prefix-guard case
+            // lands here, since a prefix names no real record file).
+            Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(false);
+            }
+            // Anything else (unparseable JSON, a non-NotFound read error) is the
+            // corrupt record this exists to clear.
+            Err(_) => {}
+        }
+
+        if dry_run {
+            return Ok(true);
+        }
+
+        self.with_index_lock(|| match self.read_index() {
+            Ok(mut index) => {
+                index.retain(|_target, ids| {
+                    ids.retain(|i| i != id);
+                    !ids.is_empty()
+                });
+                self.write_index(&index)
+            }
+            // The cache this would clean is itself unreadable; a reindex will
+            // rebuild it from disk and drop the pointer, so there is nothing to
+            // de-index here.
+            Err(Error::IndexMalformed { .. } | Error::IndexMissing { .. }) => Ok(()),
+            Err(other) => Err(other),
+        })?;
+
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            // Already gone (a concurrent purge, a manual `rm`): the goal state
+            // is reached, so report success.
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(true),
             Err(source) => Err(Error::Io { path, source }),
         }
     }

@@ -170,7 +170,10 @@ file in a week?* If yes, leave a note. If no, skip.
   `list --json` carry an always-present `malformed[]`: a note file the index
   points at that cannot be read or parsed is skipped from `notes` but surfaced
   here (`{id, target, error}`), never dropped and never a hard failure that
-  hides the healthy notes. A non-empty `malformed[]` means run `ynotes reindex`.
+  hides the healthy notes. A non-empty `malformed[]` flags a corrupt record;
+  remove it with `ynotes delete <id>` using the **full** id from the entry (a
+  prefix won't reach it). Since `v=9`, that purge is reported under `delete`'s
+  `deleted_unreadable[]`.
 - **`query` never writes; `reanchor` is the only write-on-resolve path.** An
   agent can `query` freely (idempotent, safe to parallelise). When notes have
   drifted, run `reanchor` (optionally `--dry-run` first) as a deliberate
@@ -181,7 +184,10 @@ file in a week?* If yes, leave a note. If no, skip.
   replaces a note's body in place (re-anchoring against current code).
   `delete <id>...` removes notes by full id or unambiguous hex prefix
   (≥4 chars); a prefix that matches multiple notes is refused, never
-  silently fans out. `prune` removes every orphan in one pass (use
+  silently fans out. A corrupt record that cannot be read is removable only
+  by its exact full id (a prefix never purges one, since there is no body to
+  preview); such a removal is reported under `deleted_unreadable[]` and does
+  not flip the exit code. `prune` removes every orphan in one pass (use
   `--dry-run` first to preview).
 - **`reindex` repairs the index, not the notes.** The notes under
   `.ynotes/notes/` are the source of truth; `.ynotes/index/by-path.json` is a
@@ -195,8 +201,9 @@ file in a week?* If yes, leave a note. If no, skip.
   `malformed` (records that cannot be parsed), `index` (`recovered`/`dangling`
   drift from the notes on disk), and `gitattributes_missing` (managed merge
   guards absent from a shared store). All-clean is empty arrays and zero counts;
-  anything else points at `reindex` (drift, malformed) or a re-`init`/`reindex`
-  (missing guards). The scan is lock-free and writes nothing.
+  anything else points at `reindex` (drift), `ynotes delete <id>` (a malformed
+  record), or a re-`init`/`reindex` (missing guards). The scan is lock-free and
+  writes nothing.
 
 ### `ynotes lookup [--target <path>] [--body-contains <text>] [--json]`
 

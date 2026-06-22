@@ -165,6 +165,12 @@ pub(crate) enum Command {
     /// delete multiple candidates). A prefix that matches nothing is also
     /// refused. Successful deletions still happen even when other ids in the
     /// same call fail — the process exits `1` only if anything failed.
+    ///
+    /// A corrupt record that cannot be read (flagged `unreadable` by `query`,
+    /// `list`, and `doctor`) is removable too, but only by its *exact*
+    /// 64-character id — a prefix never purges one, since there is no body to
+    /// preview. Such a purge is reported separately (`deleted_unreadable` under
+    /// `--json`) and is a success: it does not flip the exit code.
     Delete {
         /// Note ids (or unambiguous hex prefixes, >= 4 characters).
         #[arg(required = true, value_name = "ID")]

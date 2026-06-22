@@ -181,8 +181,8 @@ fn query_text_form_flags_a_malformed_note() {
         "text query flags the corrupt record: {stdout}"
     );
     assert!(
-        stdout.contains("reindex"),
-        "and points at the remedy: {stdout}"
+        stdout.contains("ynotes delete "),
+        "and points at the remedy that actually clears it: {stdout}"
     );
     // The surviving note's body is still printed.
     assert!(
@@ -263,14 +263,15 @@ fn reanchor_survives_a_malformed_note() {
     assert_eq!(json["success"], serde_json::json!(true));
 }
 
-/// `delete <id>` of a malformed record degrades gracefully: the record cannot
-/// be read to match, so it cannot be selected. `delete` reports `not_found`
-/// (exit 1, `success: true` envelope) — it never crashes and never removes the
-/// wrong note. This is the documented limitation that a corrupt record's remedy
-/// is `reindex`/manual, not `delete`; the test locks it so it cannot regress
-/// into a panic or a mis-delete.
+/// `delete <full-id>` of a malformed record *purges* it. The record cannot be
+/// read to anchor it, but its id is recoverable from its path (and is shown in
+/// `query`/`doctor` output), so an exact-id delete removes the file and drops
+/// the index pointer. This is the deliberate removal path for a corrupt note —
+/// the one verb that can clear it. A clean removal exits `0`, and the id is
+/// reported under `deleted_unreadable`, partitioned from the readable
+/// `deleted[]` (an unreadable record cannot supply a target/scope/body).
 #[test]
-fn delete_of_a_malformed_note_degrades_to_not_found() {
+fn delete_purges_an_unreadable_note_by_exact_id() {
     let dir = tempfile::tempdir().expect("tempdir");
     ynotes()
         .current_dir(dir.path())
@@ -293,20 +294,112 @@ fn delete_of_a_malformed_note_degrades_to_not_found() {
         .current_dir(dir.path())
         .args(["delete", &id, "--json"])
         .assert()
-        .failure()
-        .code(1);
+        .success(); // a clean removal — exit 0, not a partial failure
     let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
-    // A success envelope describing a partition with the id unresolved — the
-    // `delete` exit-code asymmetry, applied to an unreadable record.
     assert_eq!(json["success"], serde_json::json!(true));
     assert_eq!(
         json["data"]["deleted"].as_array().unwrap().len(),
         0,
-        "nothing is removed — the corrupt record was never matched"
+        "no *readable* note was matched"
+    );
+    assert_eq!(
+        json["data"]["deleted_unreadable"].as_array().unwrap(),
+        &vec![serde_json::json!(id)],
+        "the corrupt record is purged by its exact id"
+    );
+    assert_eq!(json["data"]["not_found"].as_array().unwrap().len(), 0);
+
+    // The file is gone from disk...
+    assert!(!bad.exists(), "the corrupt record file was removed");
+    // ...so a subsequent query no longer surfaces a malformed record.
+    let q = ynotes()
+        .current_dir(dir.path())
+        .args(["query", "code.rs", "--json"])
+        .assert()
+        .success();
+    let qj: serde_json::Value = serde_json::from_slice(&q.get_output().stdout).unwrap();
+    assert!(
+        qj["data"]["malformed"].as_array().unwrap().is_empty(),
+        "nothing left to surface once it is purged"
+    );
+}
+
+/// A *prefix* (not the exact 64-char id) of an unreadable record must NOT purge
+/// it: there is no body to preview, and a short prefix could otherwise catch a
+/// healthy note. It degrades to `not_found` (exit 1), like any unmatched
+/// prefix, and leaves the corrupt file untouched.
+#[test]
+fn delete_of_an_unreadable_note_by_prefix_is_not_found() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "1", "-m", "only-note"])
+        .assert()
+        .success();
+
+    let bad = first_note_file(dir.path());
+    let id = id_from_note_path(&bad);
+    std::fs::write(&bad, "garbage").unwrap();
+
+    let prefix: String = id.chars().take(12).collect();
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["delete", &prefix, "--json"])
+        .assert()
+        .failure()
+        .code(1);
+    let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(json["success"], serde_json::json!(true));
+    assert_eq!(
+        json["data"]["deleted_unreadable"].as_array().unwrap().len(),
+        0,
+        "a prefix never purges an unreadable record"
     );
     assert_eq!(
         json["data"]["not_found"].as_array().unwrap().len(),
         1,
-        "the unresolvable id is reported, not silently dropped"
+        "the prefix is reported unresolved, not silently dropped"
     );
+    assert!(bad.exists(), "the corrupt record is left untouched");
+}
+
+/// `--dry-run` reports the unreadable purge without performing it: the id
+/// appears in `deleted_unreadable`, but the file is still on disk.
+#[test]
+fn delete_dry_run_reports_an_unreadable_purge_without_removing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("code.rs"), "fn a() {}\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "1", "-m", "only-note"])
+        .assert()
+        .success();
+
+    let bad = first_note_file(dir.path());
+    let id = id_from_note_path(&bad);
+    std::fs::write(&bad, "garbage").unwrap();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["delete", &id, "--dry-run", "--json"])
+        .assert()
+        .success();
+    let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(
+        json["data"]["deleted_unreadable"].as_array().unwrap(),
+        &vec![serde_json::json!(id)],
+    );
+    assert_eq!(json["data"]["dry_run"], serde_json::json!(true));
+    assert!(bad.exists(), "dry-run leaves the file in place");
 }

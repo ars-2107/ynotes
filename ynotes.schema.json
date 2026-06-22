@@ -165,9 +165,9 @@
     "deleteData": {
       "type": "object",
       "title": "delete --json data",
-      "description": "Payload for `ynotes delete --json`. The three category arrays partition the requested ids — each requested id appears in exactly one of `deleted`, `ambiguous`, `not_found`. Always emitted in full (empty arrays included) so a consumer never has to branch on key presence. Exit-code asymmetry: when `ambiguous` or `not_found` is non-empty the process exits `1` even though this remains a *success* envelope (`success: true`) — the envelope describes the partition, the exit code reports partial failure. `delete` is the only command that pairs a success envelope with a non-zero exit; to detect a fully-clean delete, check that both `ambiguous` and `not_found` are empty rather than relying on the exit code or `success` alone.",
+      "description": "Payload for `ynotes delete --json`. The four category arrays partition the requested ids — each requested id appears in exactly one of `deleted`, `deleted_unreadable`, `ambiguous`, `not_found`. Always emitted in full (empty arrays included) so a consumer never has to branch on key presence. Exit-code asymmetry: when `ambiguous` or `not_found` is non-empty the process exits `1` even though this remains a *success* envelope (`success: true`) — the envelope describes the partition, the exit code reports partial failure. A `deleted_unreadable` entry is a successful removal and does NOT flip the exit code. `delete` is the only command that pairs a success envelope with a non-zero exit; to detect a fully-clean delete, check that both `ambiguous` and `not_found` are empty rather than relying on the exit code or `success` alone.",
       "additionalProperties": false,
-      "required": ["requested", "deleted", "ambiguous", "not_found", "dry_run"],
+      "required": ["requested", "deleted", "deleted_unreadable", "ambiguous", "not_found", "dry_run"],
       "properties": {
         "requested": {
           "type": "integer",
@@ -196,6 +196,11 @@
               }
             }
           }
+        },
+        "deleted_unreadable": {
+          "type": "array",
+          "description": "Ids of corrupt records purged by exact id (or, under `dry_run`, that would be). A malformed record cannot be read to supply a target/scope/body, so only its id is reported. Removal requires the full 64-character id — a short prefix can never purge an unreadable record (there is no body to preview, and a prefix could otherwise catch a healthy note). An entry here is a success, not a partial failure: it does not flip the exit code.",
+          "items": { "$ref": "#/$defs/noteId" }
         },
         "ambiguous": {
           "type": "array",
@@ -589,8 +594,8 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "const": 8,
-      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
+      "const": 9,
+      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v9 added an always-present `deleted_unreadable[]` array to `delete` (ids of *corrupt* records purged by exact id — they cannot be read to supply a target/scope/body, so they are listed as bare ids rather than rich `deleted[]` entries; an entry here is a success, not a failure, and does not flip the exit code); no existing payload field changed. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
     },
     "lineRange": {
       "type": "array",

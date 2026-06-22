@@ -69,8 +69,9 @@ pub(crate) fn malformed_view(m: &MalformedNote) -> MalformedView {
 
 /// Writes one malformed-record advisory in the human text format. Flagged in
 /// red and pointing at the remedy, so a corrupt record is loud, not hidden
-/// (invariant #4). Kept terse — the body is unreadable, so there is nothing to
-/// show but the id and why.
+/// (invariant #4). The body is unreadable, so there is nothing to show but the
+/// id, the target, and why — and the *full* id (not the short form), since it
+/// is the exact handle `ynotes delete` needs to purge the record.
 pub(crate) fn write_text_malformed(
     out: &mut impl Write,
     m: &MalformedNote,
@@ -78,11 +79,16 @@ pub(crate) fn write_text_malformed(
     writeln!(
         out,
         "{} {}  [{}]",
-        short_id(&m.id),
+        m.id,
         m.target,
-        paint("unreadable ✗ run `ynotes reindex`", Colour::Red),
+        paint("unreadable ✗", Colour::Red),
     )?;
     writeln!(out, "  {}", paint(&m.error, Colour::Dim))?;
+    writeln!(
+        out,
+        "  {}",
+        paint(&format!("remove with: ynotes delete {}", m.id), Colour::Dim,),
+    )?;
     writeln!(out)?;
     Ok(())
 }

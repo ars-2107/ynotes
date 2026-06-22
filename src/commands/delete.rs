@@ -49,13 +49,25 @@ fn run_inner(ids: &[String], dry_run: bool, json: bool) -> Result<(), CommandErr
     let store = Store::discover()?;
 
     let mut deleted: Vec<DeletedView> = Vec::new();
+    let mut deleted_unreadable: Vec<String> = Vec::new();
     let mut ambiguous: Vec<AmbiguousView> = Vec::new();
     let mut not_found: Vec<String> = Vec::new();
 
     for requested in ids {
         let matches = store.find_by_id_prefix(requested)?;
         match matches.as_slice() {
-            [] => not_found.push(requested.clone()),
+            // No *readable* match. The one removable corrupt case is an exact
+            // id naming an unreadable record on disk: `purge_unreadable` is
+            // guarded to the exact id (a prefix names no record file) and
+            // refuses a readable note, so this never bypasses the preview path
+            // above. Anything else stays `not_found`.
+            [] => {
+                if store.purge_unreadable(requested, dry_run)? {
+                    deleted_unreadable.push(requested.clone());
+                } else {
+                    not_found.push(requested.clone());
+                }
+            }
             [only] => {
                 let view = DeletedView {
                     requested: requested.clone(),
@@ -86,13 +98,20 @@ fn run_inner(ids: &[String], dry_run: bool, json: bool) -> Result<(), CommandErr
         let data = DeleteData {
             requested: ids.len(),
             deleted,
+            deleted_unreadable,
             ambiguous,
             not_found,
             dry_run,
         };
         json_envelope::print_success(&data)?;
     } else {
-        write_text(&deleted, &ambiguous, &not_found, dry_run)?;
+        write_text(
+            &deleted,
+            &deleted_unreadable,
+            &ambiguous,
+            &not_found,
+            dry_run,
+        )?;
     }
 
     if had_failure {
@@ -108,14 +127,19 @@ fn run_inner(ids: &[String], dry_run: bool, json: bool) -> Result<(), CommandErr
 
 /// Stable JSON payload for `delete --json`.
 ///
-/// `requested` is the count of ids the caller passed; the three category
-/// arrays partition the outcome (each requested id appears in exactly one).
-/// Always emitted in full — empty arrays included — so a consumer never has
-/// to branch on key presence.
+/// `requested` is the count of ids the caller passed; the four category arrays
+/// partition the outcome (each requested id appears in exactly one). Always
+/// emitted in full — empty arrays included — so a consumer never has to branch
+/// on key presence. `deleted_unreadable` (added in `v9`) holds the ids of
+/// *corrupt* records removed by exact id: they cannot be read to supply a
+/// target/scope/body, so they are listed as bare ids rather than as rich
+/// `deleted[]` entries. Unlike `ambiguous`/`not_found`, an entry here is a
+/// success, not a failure, and does not flip the exit code.
 #[derive(Serialize)]
 struct DeleteData {
     requested: usize,
     deleted: Vec<DeletedView>,
+    deleted_unreadable: Vec<String>,
     ambiguous: Vec<AmbiguousView>,
     not_found: Vec<String>,
     dry_run: bool,
@@ -139,6 +163,7 @@ struct AmbiguousView {
 
 fn write_text(
     deleted: &[DeletedView],
+    deleted_unreadable: &[String],
     ambiguous: &[AmbiguousView],
     not_found: &[String],
     dry_run: bool,
@@ -161,6 +186,16 @@ fn write_text(
             writeln!(out, "  {}", paint(&d.body_excerpt, Colour::Dim))?;
         }
     }
+    // A purged corrupt record has no body/target/scope to show — just name the
+    // id and flag why it had no preview.
+    for id in deleted_unreadable {
+        writeln!(
+            out,
+            "{} {} (unreadable record)",
+            paint(verb, Colour::Yellow),
+            short_id(id),
+        )?;
+    }
     for a in ambiguous {
         writeln!(
             out,
@@ -178,6 +213,7 @@ fn write_text(
     }
 
     let n = deleted.len();
+    let u = deleted_unreadable.len();
     let amb = ambiguous.len();
     let nf = not_found.len();
     let suffix = if dry_run {
@@ -185,11 +221,18 @@ fn write_text(
     } else {
         ""
     };
+    // Only name the unreadable count when there is one, so a routine delete's
+    // summary line is unchanged.
+    let unreadable = if u > 0 {
+        format!(", {u} unreadable purged")
+    } else {
+        String::new()
+    };
     writeln!(
         out,
         "{}",
         paint(
-            &format!("{n} {verb}, {amb} ambiguous, {nf} not found{suffix}"),
+            &format!("{n} {verb}{unreadable}, {amb} ambiguous, {nf} not found{suffix}"),
             Colour::Dim,
         )
     )?;

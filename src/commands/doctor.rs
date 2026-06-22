@@ -249,6 +249,13 @@ fn write_health_text(
     for p in &health.malformed {
         writeln!(out, "  unreadable {}", p.display())?;
     }
+    if malformed > 0 {
+        // The path above ends in the record's id; `delete` takes the full id.
+        writeln!(
+            out,
+            "  run `ynotes delete <id>` to remove an unreadable record"
+        )?;
+    }
     for line in &health.gitattributes_missing {
         writeln!(out, "  missing gitattributes rule: {line}")?;
     }

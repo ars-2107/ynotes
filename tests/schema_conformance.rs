@@ -164,6 +164,22 @@ fn malformed_and_health_payloads_conform_to_the_schema() {
         "doctor health surfaces the missing merge guards"
     );
     assert_conforms(&v, "doctor (health populated)", &doc);
+
+    // Purge the corrupt record by its exact id (recoverable from the path) and
+    // validate the populated `deleted_unreadable[]` branch — not just the empty
+    // shape the other conformance cases cover.
+    let rest = bad.file_stem().unwrap().to_str().unwrap();
+    let pre = bad.parent().unwrap().file_name().unwrap().to_str().unwrap();
+    let id = format!("{pre}{rest}");
+    let del = run_json(p, &["delete", &id, "--json"]);
+    assert!(
+        !del["data"]["deleted_unreadable"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the corrupt record is purged by exact id"
+    );
+    assert_conforms(&v, "delete (unreadable purged)", &del);
 }
 
 #[test]
@@ -190,7 +206,7 @@ fn the_validator_rejects_non_conforming_output() {
     // A success envelope whose `data` matches none of the payload `oneOf`
     // branches (each is `additionalProperties: false` with required fields).
     let unknown_payload = serde_json::json!({
-        "success": true, "v": 8, "data": { "not_a_real_payload": 1 }
+        "success": true, "v": 9, "data": { "not_a_real_payload": 1 }
     });
     assert!(
         v.iter_errors(&unknown_payload).next().is_some(),
@@ -207,7 +223,7 @@ fn the_validator_rejects_non_conforming_output() {
     // A query payload missing the now-required `malformed` array must fail —
     // this is exactly the drift the suite exists to catch.
     let missing_malformed = serde_json::json!({
-        "success": true, "v": 8,
+        "success": true, "v": 9,
         "data": { "query": { "file": "x", "at": "" }, "notes": [], "warnings": [] }
     });
     assert!(

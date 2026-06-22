@@ -94,6 +94,41 @@ fn doctor_health_flags_a_malformed_record_and_missing_gitattributes() {
     );
 }
 
+/// The human `doctor` form must point a corrupt record at the verb that
+/// actually clears it (`ynotes delete <id>`), not just list its path. This is
+/// the advisory `write_health_text` prints when `malformed > 0`.
+#[test]
+fn doctor_text_form_points_a_malformed_record_at_delete() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "a.rs", "1", "-m", "x"])
+        .assert()
+        .success();
+    std::fs::write(first_note_file(dir.path()), "garbage").unwrap();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .arg("doctor")
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("unreadable"),
+        "doctor flags the corrupt record: {stdout}"
+    );
+    assert!(
+        stdout.contains("ynotes delete"),
+        "and points at the verb that clears it: {stdout}"
+    );
+}
+
 #[test]
 fn doctor_health_counts_a_corrupt_note_as_malformed_not_dangling() {
     let dir = tempfile::tempdir().expect("tempdir");

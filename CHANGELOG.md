@@ -10,6 +10,13 @@ explicitly here.
 ## [Unreleased]
 
 ### Added
+- `ynotes delete <full-id>` can now **purge a corrupt record** — one that
+  cannot be read, so `find_by_id_prefix` (and therefore a normal `delete`/
+  `update`) could not previously reach it. Removal requires the *exact*
+  64-character id (a prefix never purges one, since there is no body to preview);
+  the id is the handle shown by `query`/`list`/`doctor`. Reported under a new
+  always-present `deleted_unreadable[]` array in `delete --json`; an entry there
+  is a success and does **not** flip the exit code.
 - `ynotes lookup [--target <path>] [--body-contains <text>]`: resolve a stable
   `(target, body)` handle to a note's current id(s). `--json` payload `lookupData`.
 - `doctor` now reports **store health**: malformed note records, index drift
@@ -33,8 +40,15 @@ explicitly here.
   same "run reindex" error it recommends.
 - A missing index over surviving notes is now reported (`run reindex`) instead
   of silently reading as "no notes".
+- The remedy a corrupt record points at is now correct. `query`/`list`/`doctor`
+  previously told the user to "run `ynotes reindex`", but `reindex` rebuilds the
+  index and never removes a malformed file, so the record kept resurfacing. They
+  now point at `ynotes delete <full-id>`, the verb that actually clears it.
 
 ### Changed
+- `--json` agent contract bumped to `v: 9` (adds the always-present
+  `deleted_unreadable[]` array to `delete`; no existing field changed; mirrored
+  in `tests/agent_contract.rs` and `ynotes.schema.json`).
 - `--json` agent contract bumped to `v: 8` (adds the `malformed[]` array to
   `query`/`list` and the `health` object to `doctor`; no existing field
   changed; mirrored in `tests/agent_contract.rs` and `ynotes.schema.json`).
