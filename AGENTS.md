@@ -129,7 +129,9 @@ of these in the same change — agents must not leave any stale:
 7. **The `--json` schema is a stable, versioned agent contract.** Any change
    to a field bumps `"v"` and, in the same change, updates **both** the
    `tests/agent_contract.rs` snapshot and the published `ynotes.schema.json`;
-   it is never altered silently.
+   it is never altered silently. `tests/schema_conformance.rs` validates every
+   command's real `--json` output against `ynotes.schema.json`, so a schema that
+   drifts from what the binary emits fails CI — the schema cannot rot unnoticed.
 8. **A resolve never writes; only `reanchor` does.** `query`/`list` are pure
    (read-only mounts, concurrent readers, a future read-only MCP server
    depend on it). `reanchor` is the sole resolve-time write path and refuses

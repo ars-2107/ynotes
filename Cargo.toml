@@ -111,6 +111,10 @@ predicates = "3"
 # Snapshot testing. A natural fit for ynotes's structured drift/diff output:
 # assert on rendered text, review changes as diffs.
 insta = "1"
+# Validates real `--json` output against the published `ynotes.schema.json`, so
+# the stable, versioned agent contract (invariant #7) cannot drift from the
+# schema file undetected. Test-only; never linked into the shipped binary.
+jsonschema = { version = "0.46", default-features = false }
 
 # --- Build profiles -------------------------------------------------------------
 
