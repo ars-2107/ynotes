@@ -34,7 +34,9 @@ pub(crate) fn run(dry_run: bool, json: bool) -> Result<(), CommandError> {
 
 fn run_inner(dry_run: bool, json: bool) -> Result<(), CommandError> {
     let store = Store::discover()?;
-    let resolved = ynotes::list(&store, None)?;
+    // `prune` removes orphans; a malformed record cannot be resolved (so it is
+    // never an orphan to prune) and is left for `reindex` to surface.
+    let resolved = ynotes::list(&store, None)?.notes;
 
     let total = resolved.len();
     let mut pruned: Vec<PrunedView> = Vec::new();

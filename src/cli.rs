@@ -62,7 +62,9 @@ pub(crate) enum Command {
     ///
     /// `230` returns that line's notes and any range/file note covering it;
     /// `230:327` returns notes overlapping the range; with no location, every
-    /// note for the file. Orphaned notes are always included.
+    /// note for the file. Orphaned notes are always included. A record that
+    /// cannot be read is surfaced (`--json` `malformed[]`), never a hard
+    /// failure that hides the rest.
     Query {
         /// The file to query.
         file: PathBuf,
@@ -80,7 +82,8 @@ pub(crate) enum Command {
         explain: bool,
     },
 
-    /// List every note in the store, with its current anchor status.
+    /// List every note in the store, with its current anchor status. A record
+    /// that cannot be read is surfaced (`--json` `malformed[]`), never dropped.
     List {
         /// Restrict to one file (default: every note in the store).
         file: Option<PathBuf>,
@@ -211,9 +214,10 @@ pub(crate) enum Command {
     },
 
     /// Report the environment ynotes resolves against (read-only health
-    /// check): version, platform, `git` availability, and the discovered
-    /// store with its note count. `--json` emits the same facts as a
-    /// machine-readable object.
+    /// check): version, platform, `git` availability, the discovered store with
+    /// its note count, and store health — malformed note records, index drift,
+    /// and missing managed `.gitattributes` merge guards. `--json` emits the
+    /// same facts as a machine-readable object.
     Doctor {
         /// Emit machine-readable JSON instead of the text report.
         #[arg(long)]

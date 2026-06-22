@@ -11,7 +11,9 @@ use serde::Serialize;
 use ynotes::{LineSpec, QueryResult, Store};
 
 use super::json_envelope;
-use super::render::{NoteView, note_view, write_text_note};
+use super::render::{
+    MalformedView, NoteView, malformed_view, note_view, write_text_malformed, write_text_note,
+};
 use crate::command_error::CommandError;
 
 /// Resolve notes for `file` at `at` and print them.
@@ -46,6 +48,11 @@ struct QueryData<'a> {
     /// `list` share one shape, with orphans still always returned (the
     /// never-drop promise — invariant #4).
     notes: Vec<NoteView>,
+    /// Records for this file the index pointed at that could not be read or
+    /// parsed. Skipped from `notes` (they cannot be resolved) but surfaced here
+    /// so a corrupt record is never silently dropped from a query (invariant
+    /// #4). Always present; empty when there is nothing to flag.
+    malformed: Vec<MalformedView>,
     /// Non-fatal advisories — populated, for example, when the target file
     /// does not exist (almost always a typo, but `exit=0` is the right Unix
     /// signal for "no match" so the warning lives in-band). Always present,
@@ -90,6 +97,7 @@ fn run_json(file: &Path, at: Option<&str>, explain: bool) -> Result<(), CommandE
             at: at.unwrap_or(""),
         },
         notes,
+        malformed: result.malformed.iter().map(malformed_view).collect(),
         warnings,
     };
     json_envelope::print_success(&data)
@@ -108,7 +116,10 @@ fn render_text(file: &Path, result: &QueryResult, explain: bool) -> Result<(), C
     for rn in result.matched.iter().chain(&result.orphaned) {
         write_text_note(&mut out, rn, explain)?;
     }
-    if result.matched.is_empty() && result.orphaned.is_empty() {
+    for m in &result.malformed {
+        write_text_malformed(&mut out, m)?;
+    }
+    if result.matched.is_empty() && result.orphaned.is_empty() && result.malformed.is_empty() {
         // Finding nothing is exit 0, not an error (the query contract): the
         // "nothing here" advisory goes to stderr to keep stdout pure. A
         // nonexistent path is named explicitly — almost always a typo, so it

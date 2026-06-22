@@ -123,7 +123,12 @@ pub fn reanchor(store: &Store, dry_run: bool) -> Result<ReanchorReport> {
         unchanged: 0,
     };
 
-    for note in store.all_notes()? {
+    // A malformed record cannot be parsed into a `Note`, so it never enters
+    // this loop: it cannot be anchored against current code, and welding it
+    // would be guesswork. It stays on disk, surfaced by `doctor`/`reindex`
+    // rather than here — re-anchoring is not the place to report a corrupt
+    // record. (`all_notes` skips it; it is not silently deleted.)
+    for note in store.all_notes()?.notes {
         let abs = workdir.join(&note.target);
         // Mirror the save-time symlink guard: a target replaced by a symlink
         // after the note was saved (or a stored note whose target is itself

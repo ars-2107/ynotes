@@ -163,10 +163,14 @@ file in a week?* If yes, leave a note. If no, skip.
     `data.not_found` are both empty — neither `success` nor the exit code
     alone is sufficient.
 - **`query` returns one `notes` array.** Since `v=5`, `query --json` carries
-  `{query, notes, warnings}` — every resolved note in a single array, with
-  `status` discriminating. Group by `status == "orphaned"` if you want the
-  historical matched-vs-orphaned split; orphans are still always returned (the
-  never-drop promise).
+  every resolved note in a single array, with `status` discriminating. Group by
+  `status == "orphaned"` if you want the historical matched-vs-orphaned split;
+  orphans are still always returned (the never-drop promise).
+- **A corrupt record never sinks a read.** Since `v=8`, `query --json` and
+  `list --json` carry an always-present `malformed[]`: a note file the index
+  points at that cannot be read or parsed is skipped from `notes` but surfaced
+  here (`{id, target, error}`), never dropped and never a hard failure that
+  hides the healthy notes. A non-empty `malformed[]` means run `ynotes reindex`.
 - **`query` never writes; `reanchor` is the only write-on-resolve path.** An
   agent can `query` freely (idempotent, safe to parallelise). When notes have
   drifted, run `reanchor` (optionally `--dry-run` first) as a deliberate
@@ -187,6 +191,12 @@ file in a week?* If yes, leave a note. If no, skip.
   the index forgot and drops any pointer with no note behind it, reporting both
   in `--json` (`recovered`/`dangling`/`malformed`). It never reads the anchor
   ladder and never touches a note, so it cannot lose context or rotate an id.
+- **`doctor --json` carries a `health` block.** Read-only store diagnostics:
+  `malformed` (records that cannot be parsed), `index` (`recovered`/`dangling`
+  drift from the notes on disk), and `gitattributes_missing` (managed merge
+  guards absent from a shared store). All-clean is empty arrays and zero counts;
+  anything else points at `reindex` (drift, malformed) or a re-`init`/`reindex`
+  (missing guards). The scan is lock-free and writes nothing.
 
 ### `ynotes lookup [--target <path>] [--body-contains <text>] [--json]`
 

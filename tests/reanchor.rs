@@ -56,6 +56,7 @@ fn reanchor_refreshes_a_drifted_note_and_is_idempotent() {
         store
             .notes_for("lib.rs")
             .unwrap()
+            .notes
             .iter()
             .any(|n| n.id == original.id),
         "dry run must not modify the store"
@@ -64,7 +65,7 @@ fn reanchor_refreshes_a_drifted_note_and_is_idempotent() {
     // Apply: the old note is superseded by a new content-addressed id.
     let applied = reanchor(&store, false).unwrap();
     assert_eq!(applied.changed.len(), 1);
-    let live = store.notes_for("lib.rs").unwrap();
+    let live = store.notes_for("lib.rs").unwrap().notes;
     assert_eq!(live.len(), 1, "superseded, not duplicated");
     assert_ne!(live[0].id, original.id, "id reflects the refreshed bundle");
     assert_eq!(live[0].body, "hot path");
@@ -95,7 +96,7 @@ fn reanchor_never_touches_an_orphaned_note() {
     let report = reanchor(&store, false).unwrap();
     assert_eq!(report.changed.len(), 0);
     assert_eq!(report.skipped.len(), 1, "orphaned ⇒ left for a human");
-    let live = store.notes_for("a.rs").unwrap();
+    let live = store.notes_for("a.rs").unwrap().notes;
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].id, note.id, "untouched: same id, same anchor");
 }
@@ -167,7 +168,12 @@ fn reanchor_on_a_dirty_tree_keeps_the_git_rung_consistent() {
     assert_eq!(report.changed.len(), 1, "the drifted note is refreshed");
 
     let ctx = GitContext::discover(root).expect("repo discovered");
-    let refreshed = store.notes_for("s.rs").unwrap().pop().expect("one note");
+    let refreshed = store
+        .notes_for("s.rs")
+        .unwrap()
+        .notes
+        .pop()
+        .expect("one note");
 
     // `beta()` is now at 8:11. The git rung must agree — not report 11:14,
     // which is 8:11 plus the three-line skew uncommitted at reanchor time.

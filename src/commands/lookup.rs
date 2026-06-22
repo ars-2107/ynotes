@@ -49,7 +49,10 @@ struct LookupData {
 
 fn run_json(target: Option<&Path>, body_contains: Option<&str>) -> Result<(), CommandError> {
     let store = Store::discover().map_err(CommandError::Engine)?;
-    let notes = ynotes::lookup(&store, target, body_contains)?;
+    // `lookup` matches on (target, body); a malformed record cannot be read to
+    // match either, so it structurally cannot appear here — `query`/`list`/
+    // `doctor` are where a corrupt record surfaces. The payload stays `{notes}`.
+    let notes = ynotes::lookup(&store, target, body_contains)?.notes;
     let data = LookupData {
         notes: notes.iter().map(|n| note_view(n, false)).collect(),
     };
@@ -58,7 +61,7 @@ fn run_json(target: Option<&Path>, body_contains: Option<&str>) -> Result<(), Co
 
 fn run_text(target: Option<&Path>, body_contains: Option<&str>) -> Result<(), CommandError> {
     let store = Store::discover().map_err(CommandError::Engine)?;
-    let notes = ynotes::lookup(&store, target, body_contains)?;
+    let notes = ynotes::lookup(&store, target, body_contains)?.notes;
     if notes.is_empty() {
         eprintln!("ynotes: no notes match");
         return Ok(());

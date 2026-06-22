@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 use crate::git::GitContext;
 use crate::note::{Note, Scope};
 use crate::source::{LineRange, SourceFile};
-use crate::store::Store;
+use crate::store::{MalformedNote, Store};
 
 /// A parsed location argument: a single line, a range, or the whole file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +97,23 @@ pub struct QueryResult {
     pub matched: Vec<ResolvedNote>,
     /// Notes for the file that no rung could locate.
     pub orphaned: Vec<ResolvedNote>,
+    /// Records for the file the index pointed at but which could not be read
+    /// or parsed. Skipped from `matched`/`orphaned` (they cannot be resolved)
+    /// but surfaced here so a corrupt record is never silently dropped
+    /// (invariant #4).
+    pub malformed: Vec<MalformedNote>,
+}
+
+/// The result of a `list`/`lookup`: every resolved note, plus any records that
+/// could not be read. The list-shaped analogue of [`QueryResult`]'s
+/// `malformed`, carried so a store inventory cannot silently omit a corrupt
+/// record (invariant #4).
+#[derive(Debug, Clone)]
+pub struct ListResult {
+    /// Every note resolved against its current target.
+    pub notes: Vec<ResolvedNote>,
+    /// Records the index pointed at but which could not be read or parsed.
+    pub malformed: Vec<MalformedNote>,
 }
 
 /// Resolves every note for `file` and returns those a `at` query should yield.
@@ -111,7 +128,8 @@ pub struct QueryResult {
 /// [`Error::Invalid`] if the index or a note record cannot be read.
 pub fn query(store: &Store, file: &Path, at: LineSpec) -> Result<QueryResult> {
     let target = store.relativize(file)?;
-    let notes = store.notes_for(&target)?;
+    let scan = store.notes_for(&target)?;
+    let notes = scan.notes;
 
     // A deleted/absent file yields an empty source, so every rung misses and
     // the notes orphan — still returned, per the core promise.
@@ -150,7 +168,11 @@ pub fn query(store: &Store, file: &Path, at: LineSpec) -> Result<QueryResult> {
             .then(range_start(a).cmp(&range_start(b)))
     });
 
-    Ok(QueryResult { matched, orphaned })
+    Ok(QueryResult {
+        matched,
+        orphaned,
+        malformed: scan.malformed,
+    })
 }
 
 /// Resolves every note in the store (optionally restricted to `only`),
@@ -167,11 +189,13 @@ pub fn query(store: &Store, file: &Path, at: LineSpec) -> Result<QueryResult> {
 ///
 /// # Errors
 ///
-/// [`Error::Invalid`] if `only` is outside the store, or [`Error::Io`] /
-/// [`Error::Invalid`] if the index or a note record cannot be read.
-pub fn list(store: &Store, only: Option<&Path>) -> Result<Vec<ResolvedNote>> {
+/// [`Error::Invalid`] if `only` is outside the store, or
+/// [`Error::IndexMalformed`]/[`Error::IndexMissing`]/[`Error::Io`] if the
+/// *index* is unreadable. A malformed *note* is surfaced in
+/// [`ListResult::malformed`], never an error.
+pub fn list(store: &Store, only: Option<&Path>) -> Result<ListResult> {
     let workdir = store.workdir()?.to_path_buf();
-    let notes = match only {
+    let scan = match only {
         Some(p) if p.is_dir() => {
             // Directory filter: scan all notes and keep those under the
             // relativised prefix. A trailing slash anchors the boundary so
@@ -184,11 +208,15 @@ pub fn list(store: &Store, only: Option<&Path>) -> Result<Vec<ResolvedNote>> {
             } else {
                 format!("{rel}/")
             };
-            store
-                .all_notes()?
-                .into_iter()
-                .filter(|n| prefix.is_empty() || n.target.starts_with(&prefix))
-                .collect()
+            let mut scan = store.all_notes()?;
+            // Filter both the healthy and the malformed records by the same
+            // prefix, so a directory listing's `malformed` reports only records
+            // under that directory (each malformed record carries its target).
+            scan.notes
+                .retain(|n| prefix.is_empty() || n.target.starts_with(&prefix));
+            scan.malformed
+                .retain(|m| prefix.is_empty() || m.target.starts_with(&prefix));
+            scan
         }
         Some(p) => store.notes_for(&store.relativize(p)?)?,
         None => store.all_notes()?,
@@ -196,8 +224,8 @@ pub fn list(store: &Store, only: Option<&Path>) -> Result<Vec<ResolvedNote>> {
     let git = GitContext::discover(&workdir);
 
     let mut cache: std::collections::HashMap<String, SourceFile> = std::collections::HashMap::new();
-    let mut out = Vec::with_capacity(notes.len());
-    for note in notes {
+    let mut out = Vec::with_capacity(scan.notes.len());
+    for note in scan.notes {
         if !cache.contains_key(&note.target) {
             let abs = workdir.join(&note.target);
             // Missing/unreadable target ⇒ empty source ⇒ the note orphans
@@ -218,7 +246,10 @@ pub fn list(store: &Store, only: Option<&Path>) -> Result<Vec<ResolvedNote>> {
             .then(scope_rank(a.note.scope).cmp(&scope_rank(b.note.scope)))
             .then(range_start(a).cmp(&range_start(b)))
     });
-    Ok(out)
+    Ok(ListResult {
+        notes: out,
+        malformed: scan.malformed,
+    })
 }
 
 /// Resolve the stable `(target, body)` handle to the matching notes, each with
@@ -247,12 +278,12 @@ pub fn lookup(
     store: &Store,
     target: Option<&Path>,
     body_contains: Option<&str>,
-) -> Result<Vec<ResolvedNote>> {
-    let mut notes = list(store, target)?;
+) -> Result<ListResult> {
+    let mut result = list(store, target)?;
     if let Some(needle) = body_contains {
-        notes.retain(|rn| rn.note.body.contains(needle));
+        result.notes.retain(|rn| rn.note.body.contains(needle));
     }
-    Ok(notes)
+    Ok(result)
 }
 
 /// Whether a resolved (non-orphan) note satisfies the query interval under

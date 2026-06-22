@@ -8,7 +8,9 @@ use serde::Serialize;
 use ynotes::Store;
 
 use super::json_envelope;
-use super::render::{NoteView, note_view, write_text_note};
+use super::render::{
+    MalformedView, NoteView, malformed_view, note_view, write_text_malformed, write_text_note,
+};
 use crate::command_error::CommandError;
 use ynotes::ResolvedNote;
 
@@ -30,6 +32,11 @@ pub(crate) fn run(file: Option<&Path>, json: bool) -> Result<(), CommandError> {
 #[derive(Serialize)]
 struct ListData {
     notes: Vec<NoteView>,
+    /// Records the index pointed at that could not be read or parsed. Skipped
+    /// from `notes` (they cannot be resolved) but surfaced here so a corrupt
+    /// record is never silently omitted from an inventory (invariant #4).
+    /// Always present; empty when there is nothing to flag.
+    malformed: Vec<MalformedView>,
     /// Non-fatal advisories, populated when a filter matched nothing (the
     /// human form already distinguishes these cases; the array gives a
     /// machine consumer the same signal). Always present; empty when there is
@@ -39,10 +46,11 @@ struct ListData {
 
 fn run_json(file: Option<&Path>) -> Result<(), CommandError> {
     let store = Store::discover().map_err(CommandError::Engine)?;
-    let notes = ynotes::list(&store, file)?;
-    let warnings = list_warnings(file, &notes);
+    let result = ynotes::list(&store, file)?;
+    let warnings = list_warnings(file, &result.notes);
     let data = ListData {
-        notes: notes.iter().map(|n| note_view(n, false)).collect(),
+        notes: result.notes.iter().map(|n| note_view(n, false)).collect(),
+        malformed: result.malformed.iter().map(malformed_view).collect(),
         warnings,
     };
     json_envelope::print_success(&data)
@@ -50,16 +58,19 @@ fn run_json(file: Option<&Path>) -> Result<(), CommandError> {
 
 fn run_text(file: Option<&Path>) -> Result<(), CommandError> {
     let store = Store::discover().map_err(CommandError::Engine)?;
-    let notes = ynotes::list(&store, file)?;
+    let result = ynotes::list(&store, file)?;
     let mut out = std::io::stdout().lock();
-    if notes.is_empty() {
+    if result.notes.is_empty() && result.malformed.is_empty() {
         match file {
             Some(p) => eprintln!("ynotes: {}", empty_filter_message(p)),
             None => eprintln!("ynotes: no notes in this store"),
         }
     } else {
-        for rn in &notes {
+        for rn in &result.notes {
             write_text_note(&mut out, rn, false)?;
+        }
+        for m in &result.malformed {
+            write_text_malformed(&mut out, m)?;
         }
     }
     Ok(())

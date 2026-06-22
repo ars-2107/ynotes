@@ -1,10 +1,13 @@
 //! `ynotes doctor` — report the environment ynotes resolves against.
 //!
 //! Strictly read-only: it mutates nothing (invariant 8 — a resolve never
-//! writes, and `doctor` writes nothing it resolves). Two jobs: make a bug
-//! report self-contained (version, platform), and surface a *degraded* state
+//! writes, and `doctor` writes nothing it resolves). Three jobs: make a bug
+//! report self-contained (version, platform), surface a *degraded* environment
 //! before it puzzles a user — chiefly a missing `git` binary, which silently
-//! disables R1's transport rung.
+//! disables R1's transport rung — and report *store health*: malformed note
+//! records, index drift, and missing managed `.gitattributes` merge guards.
+//! The health scan is lock-free and writes nothing (it must not perturb what it
+//! diagnoses), so the read-only contract holds.
 //!
 //! `--json` emits the same facts as a single object so an agent can read the
 //! environment without parsing the human text.
@@ -41,6 +44,49 @@ enum StoreReport {
     },
 }
 
+/// Index-drift counts for the health report (mirrors [`ynotes::IndexHealth`]).
+#[derive(Serialize)]
+struct IndexHealthView {
+    /// Ids present on disk but missing from the index (a reindex restores).
+    recovered: usize,
+    /// Index pointers with no file behind them (a reindex drops).
+    dangling: usize,
+}
+
+/// Store-health diagnostics for `doctor --json`. Defined locally (not by
+/// deriving on the engine type) so the agent contract stays a deliberate
+/// surface. Present only when a store was discovered.
+#[derive(Serialize)]
+struct HealthView {
+    /// Paths under `.ynotes/notes/` that could not be read or parsed.
+    malformed: Vec<String>,
+    /// How far the index cache has drifted from the notes on disk.
+    index: IndexHealthView,
+    /// Managed `.gitattributes` lines absent from the store — the merge guards
+    /// (`init`/`reindex` re-add them). Non-empty on a shared store means a
+    /// future merge could corrupt it.
+    gitattributes_missing: Vec<String>,
+}
+
+impl From<ynotes::StoreHealth> for HealthView {
+    fn from(h: ynotes::StoreHealth) -> Self {
+        Self {
+            // Lossy is safe: these paths live under `.ynotes/notes/` and are
+            // reported for inspection, not re-opened by key.
+            malformed: h
+                .malformed
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
+            index: IndexHealthView {
+                recovered: h.index.recovered,
+                dangling: h.index.dangling,
+            },
+            gitattributes_missing: h.gitattributes_missing,
+        }
+    }
+}
+
 /// The machine-readable environment report (`doctor --json`).
 #[derive(Serialize)]
 struct DoctorReport<'a> {
@@ -53,6 +99,10 @@ struct DoctorReport<'a> {
     git: Option<String>,
     /// The store the current directory resolves to.
     store: StoreReport,
+    /// Store-health diagnostics. Present only when a store was discovered and
+    /// its health could be read; absent when no store was found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health: Option<HealthView>,
 }
 
 /// Write diagnostic information to stdout — human text, or JSON when `json`.
@@ -73,30 +123,42 @@ pub(crate) fn run(json: bool) -> Result<(), CommandError> {
 /// Emit the environment report as a single JSON object, wrapped in the
 /// shared `{success, v, data}` envelope.
 fn run_json() -> Result<(), CommandError> {
+    // Compute the store summary and its health together: both come from the
+    // discovered store, and health runs even when `all_notes` fails (e.g. a
+    // malformed index) — that is exactly what it diagnoses.
+    let (store, health) = match ynotes::Store::discover() {
+        Ok(store) => {
+            let path = store.root().display().to_string();
+            let store_report = match store.all_notes() {
+                Ok(scan) => StoreReport::Found {
+                    path: path.clone(),
+                    notes: scan.notes.len(),
+                },
+                Err(e) => StoreReport::Unreadable {
+                    path: Some(path.clone()),
+                    reason: e.to_string(),
+                },
+            };
+            // A health read that itself fails (a genuine I/O error) is omitted
+            // rather than fatal — `doctor` still reports the rest.
+            let health = store.health().ok().map(HealthView::from);
+            (store_report, health)
+        }
+        Err(ynotes::Error::StoreNotFound { .. }) => (StoreReport::None, None),
+        Err(e) => (
+            StoreReport::Unreadable {
+                path: None,
+                reason: e.to_string(),
+            },
+            None,
+        ),
+    };
     let report = DoctorReport {
         version: ynotes::version(),
         platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
         git: ynotes::git_version(),
-        store: match ynotes::Store::discover() {
-            Ok(store) => {
-                let path = store.root().display().to_string();
-                match store.all_notes() {
-                    Ok(notes) => StoreReport::Found {
-                        path,
-                        notes: notes.len(),
-                    },
-                    Err(e) => StoreReport::Unreadable {
-                        path: Some(path),
-                        reason: e.to_string(),
-                    },
-                }
-            }
-            Err(ynotes::Error::StoreNotFound { .. }) => StoreReport::None,
-            Err(e) => StoreReport::Unreadable {
-                path: None,
-                reason: e.to_string(),
-            },
-        },
+        store,
+        health,
     };
     json_envelope::print_success(&report)
 }
@@ -135,14 +197,21 @@ fn run_text() -> Result<(), CommandError> {
     // collapsing it into "none found".
     match ynotes::Store::discover() {
         Ok(store) => {
-            let root = store.root().display();
+            let root = store.root().display().to_string();
             match store.all_notes() {
-                Ok(notes) => {
-                    let n = notes.len();
+                Ok(scan) => {
+                    let n = scan.notes.len();
                     let plural = if n == 1 { "" } else { "s" };
                     writeln!(out, "{:<10}{root} ({n} note{plural})", "store")?;
                 }
                 Err(e) => writeln!(out, "{:<10}{root} (notes unreadable: {e})", "store")?,
+            }
+            // Health runs even when the note count above failed (a malformed
+            // index): it is the diagnostic for exactly that. A health read that
+            // itself errors is reported, not fatal.
+            match store.health() {
+                Ok(health) => write_health_text(&mut out, &health)?,
+                Err(e) => writeln!(out, "{:<10}unreadable: {e}", "health")?,
             }
         }
         Err(ynotes::Error::StoreNotFound { .. }) => {
@@ -151,5 +220,43 @@ fn run_text() -> Result<(), CommandError> {
         Err(e) => writeln!(out, "{:<10}unreadable: {e}", "store")?,
     }
 
+    Ok(())
+}
+
+/// Render the store-health block: a `health` summary line plus a detail line
+/// per problem. Prints `ok` when nothing is wrong, so a clean store still shows
+/// the health row (its absence would be ambiguous).
+fn write_health_text(
+    out: &mut impl Write,
+    health: &ynotes::StoreHealth,
+) -> Result<(), CommandError> {
+    let malformed = health.malformed.len();
+    let recovered = health.index.recovered;
+    let dangling = health.index.dangling;
+    let guards = health.gitattributes_missing.len();
+
+    if malformed == 0 && recovered == 0 && dangling == 0 && guards == 0 {
+        writeln!(out, "{:<10}ok", "health")?;
+        return Ok(());
+    }
+
+    writeln!(
+        out,
+        "{:<10}{malformed} unreadable, index drift ({recovered} recovered, {dangling} dangling), {guards} missing merge guard{}",
+        "health",
+        if guards == 1 { "" } else { "s" },
+    )?;
+    for p in &health.malformed {
+        writeln!(out, "  unreadable {}", p.display())?;
+    }
+    for line in &health.gitattributes_missing {
+        writeln!(out, "  missing gitattributes rule: {line}")?;
+    }
+    if recovered > 0 || dangling > 0 {
+        writeln!(
+            out,
+            "  run `ynotes reindex` to reconcile the index with notes/"
+        )?;
+    }
     Ok(())
 }

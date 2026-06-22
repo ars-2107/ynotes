@@ -49,11 +49,11 @@ fn lookup_filters_by_target_and_body_substring() {
     );
 
     // target only: both notes for a.rs.
-    let by_target = lookup(&store, Some(&a), None).unwrap();
+    let by_target = lookup(&store, Some(&a), None).unwrap().notes;
     assert_eq!(by_target.len(), 2);
 
     // body only (no target): both "token refresh" notes across files.
-    let by_body = lookup(&store, None, Some("token refresh")).unwrap();
+    let by_body = lookup(&store, None, Some("token refresh")).unwrap().notes;
     assert_eq!(by_body.len(), 2);
     assert!(
         by_body
@@ -62,12 +62,14 @@ fn lookup_filters_by_target_and_body_substring() {
     );
 
     // both: just the a.rs token-refresh note.
-    let both = lookup(&store, Some(&a), Some("token refresh")).unwrap();
+    let both = lookup(&store, Some(&a), Some("token refresh"))
+        .unwrap()
+        .notes;
     assert_eq!(both.len(), 1);
     assert_eq!(both[0].note.target, "a.rs");
 
     // case-sensitive: no match for a different case.
-    let none = lookup(&store, None, Some("TOKEN REFRESH")).unwrap();
+    let none = lookup(&store, None, Some("TOKEN REFRESH")).unwrap().notes;
     assert!(none.is_empty(), "body match is case-sensitive");
 }
 

@@ -8,7 +8,7 @@
 use std::io::Write;
 
 use serde::Serialize;
-use ynotes::{AnchorStatus, ResolvedNote, Rung, RungResult, Scope};
+use ynotes::{AnchorStatus, MalformedNote, ResolvedNote, Rung, RungResult, Scope};
 
 use crate::colour::{Colour, paint};
 use crate::command_error::CommandError;
@@ -45,6 +45,46 @@ pub(crate) struct NoteView {
     /// is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) rungs: Option<Vec<RungView>>,
+}
+
+/// The stable JSON object for a record the index pointed at that could not be
+/// read or parsed. Shared by `query` and `list` so their `malformed[]` arrays
+/// are byte-identical for the same input. `error` is free-form (for display) —
+/// a consumer branches on an entry *existing*, not on its text.
+#[derive(Serialize)]
+pub(crate) struct MalformedView {
+    pub(crate) id: String,
+    pub(crate) target: String,
+    pub(crate) error: String,
+}
+
+/// Maps an engine [`MalformedNote`] to its stable view.
+pub(crate) fn malformed_view(m: &MalformedNote) -> MalformedView {
+    MalformedView {
+        id: m.id.clone(),
+        target: m.target.clone(),
+        error: m.error.clone(),
+    }
+}
+
+/// Writes one malformed-record advisory in the human text format. Flagged in
+/// red and pointing at the remedy, so a corrupt record is loud, not hidden
+/// (invariant #4). Kept terse — the body is unreadable, so there is nothing to
+/// show but the id and why.
+pub(crate) fn write_text_malformed(
+    out: &mut impl Write,
+    m: &MalformedNote,
+) -> Result<(), CommandError> {
+    writeln!(
+        out,
+        "{} {}  [{}]",
+        short_id(&m.id),
+        m.target,
+        paint("unreadable ✗ run `ynotes reindex`", Colour::Red),
+    )?;
+    writeln!(out, "  {}", paint(&m.error, Colour::Dim))?;
+    writeln!(out)?;
+    Ok(())
 }
 
 /// Maps a resolved note to its view; includes the rung vector if `explain`.

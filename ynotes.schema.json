@@ -78,7 +78,7 @@
       "title": "query --json data",
       "description": "Payload for `ynotes query --json`: every note this query returns. Anchored, drifted, and orphaned notes share one `notes` array — `status` discriminates. Orphans are always included regardless of the queried interval (the never-drop promise).",
       "additionalProperties": false,
-      "required": ["query", "notes", "warnings"],
+      "required": ["query", "notes", "malformed", "warnings"],
       "properties": {
         "query": {
           "type": "object",
@@ -100,6 +100,11 @@
           "description": "Every note this query returns — anchored or drifted matches of the queried interval, plus every orphaned note for the file (always included). Ordered: matches first (anchored/drifted), then orphans. Group by `status` if you want the historical matched-vs-orphaned split.",
           "items": { "$ref": "#/$defs/note" }
         },
+        "malformed": {
+          "type": "array",
+          "description": "Records for this file the index pointed at that could not be read or parsed as a note. Skipped from `notes` (they cannot be resolved) but surfaced here so a corrupt record is never silently dropped from a query (invariant #4); the remedy is `ynotes reindex`. Always present; empty array when there is nothing to flag.",
+          "items": { "$ref": "#/$defs/malformedNote" }
+        },
         "warnings": {
           "type": "array",
           "description": "Non-fatal advisories about this query — for example, that the target file does not exist (almost always a typo). The command still exits 0; the warning is the in-band signal. Always present; empty array when there is nothing to flag.",
@@ -112,11 +117,16 @@
       "title": "list --json data",
       "description": "Payload for `ynotes list --json`: every note in the store with its current anchor status.",
       "additionalProperties": false,
-      "required": ["notes", "warnings"],
+      "required": ["notes", "malformed", "warnings"],
       "properties": {
         "notes": {
           "type": "array",
           "items": { "$ref": "#/$defs/note" }
+        },
+        "malformed": {
+          "type": "array",
+          "description": "Records the index pointed at that could not be read or parsed as a note. Skipped from `notes` (they cannot be resolved) but surfaced here so a corrupt record is never silently omitted from an inventory (invariant #4); the remedy is `ynotes reindex`. With a directory/file filter, only records under it are listed. Always present; empty array when there is nothing to flag.",
+          "items": { "$ref": "#/$defs/malformedNote" }
         },
         "warnings": {
           "type": "array",
@@ -351,7 +361,7 @@
     "doctorData": {
       "type": "object",
       "title": "doctor --json data",
-      "description": "Payload for `ynotes doctor --json`: the environment ynotes resolves against. Its `platform` and `git` values are machine-dependent, so it is not snapshot-locked.",
+      "description": "Payload for `ynotes doctor --json`: the environment ynotes resolves against, plus read-only store-health diagnostics. Its `platform` and `git` values are machine-dependent, so it is not snapshot-locked.",
       "additionalProperties": false,
       "required": ["version", "platform", "git", "store"],
       "properties": {
@@ -413,6 +423,43 @@
               }
             }
           ]
+        },
+        "health": {
+          "type": "object",
+          "title": "store health",
+          "description": "Read-only store-health diagnostics. Present only when a store was discovered (absent when none was found). All-clean is `malformed: []`, `index.recovered: 0`, `index.dangling: 0`, `gitattributes_missing: []`.",
+          "additionalProperties": false,
+          "required": ["malformed", "index", "gitattributes_missing"],
+          "properties": {
+            "malformed": {
+              "type": "array",
+              "description": "Paths under `.ynotes/notes/` that could not be read or parsed as a note — present but corrupt. Surfaced so a corrupt record is visible, not silently dropped (invariant #4); the remedy is `ynotes reindex`. Always present; empty when none.",
+              "items": { "type": "string" }
+            },
+            "index": {
+              "type": "object",
+              "description": "How far the by-path index cache has drifted from the notes on disk; both zero on a sound store. `ynotes reindex` reconciles it.",
+              "additionalProperties": false,
+              "required": ["recovered", "dangling"],
+              "properties": {
+                "recovered": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Ids present on disk but missing from the index — a reindex restores them."
+                },
+                "dangling": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Index pointers with no file behind them at all — a reindex drops them. A present-but-unreadable record is reported under `malformed`, not here, so one corrupt note is never double-counted."
+                }
+              }
+            },
+            "gitattributes_missing": {
+              "type": "array",
+              "description": "Managed `.ynotes/.gitattributes` lines absent from the store (e.g. `notes/** -merge`, `index/by-path.json merge=union`). Non-empty on a shared store means the merge guards are not in force and a future merge could corrupt note JSON; `init`/`reindex` re-add them. Always present; empty when the guards are intact.",
+              "items": { "type": "string" }
+            }
+          }
         }
       }
     },
@@ -508,6 +555,24 @@
         }
       }
     },
+    "malformedNote": {
+      "type": "object",
+      "title": "Malformed note record",
+      "description": "A record the index points at that could not be read or parsed as a note. Surfaced by the read paths (`query`, `list`) so a corrupt record is never silently dropped and never sinks an otherwise healthy read (invariant #4). The remedy is `ynotes reindex`. Note: such a record cannot be selected by `delete`/`update` (it cannot be read to match) — reindex or a manual fix is the path.",
+      "additionalProperties": false,
+      "required": ["id", "target", "error"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/noteId",
+          "description": "The id the index filed this record under — its on-disk filename stem. The corruption is in the record's contents, not its name, so the id is still well-formed."
+        },
+        "target": { "$ref": "#/$defs/target" },
+        "error": {
+          "type": "string",
+          "description": "Why the record could not be read or parsed. Free-form, for display — branch on an entry being present, not on this text."
+        }
+      }
+    },
     "noteId": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
@@ -524,8 +589,8 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "const": 7,
-      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
+      "const": 8,
+      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
     },
     "lineRange": {
       "type": "array",

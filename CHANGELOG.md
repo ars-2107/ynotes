@@ -12,8 +12,19 @@ explicitly here.
 ### Added
 - `ynotes lookup [--target <path>] [--body-contains <text>]`: resolve a stable
   `(target, body)` handle to a note's current id(s). `--json` payload `lookupData`.
+- `doctor` now reports **store health**: malformed note records, index drift
+  (`recovered`/`dangling`), and missing managed `.gitattributes` merge guards.
+  `--json` carries a `health` object; the scan is read-only and lock-free.
+- `query --json` and `list --json` now carry an always-present `malformed[]`
+  array — note records the index points at that cannot be read or parsed
+  (`{id, target, error}`), surfaced rather than dropped.
 
 ### Fixed
+- A single malformed note file no longer hard-fails `query`/`list` (and, through
+  them, `lookup`/`reanchor`/`doctor`). The bad record is skipped from the
+  results and surfaced (`malformed[]` / `doctor` `health`), so one corrupt
+  record can neither sink an otherwise healthy read nor hide behind it
+  (invariant #4). Mirrors `reindex`'s long-standing posture.
 - Note files are no longer corrupted by a team merge: the store ships
   `notes/** -merge` so git never textually merges content-addressed note JSON
   (a concurrent reanchor/update or identical save previously injected conflict
@@ -24,6 +35,9 @@ explicitly here.
   of silently reading as "no notes".
 
 ### Changed
+- `--json` agent contract bumped to `v: 8` (adds the `malformed[]` array to
+  `query`/`list` and the `health` object to `doctor`; no existing field
+  changed; mirrored in `tests/agent_contract.rs` and `ynotes.schema.json`).
 - `--json` agent contract bumped to `v: 7` (adds the `lookup` payload; mirrored
   in `tests/agent_contract.rs` and `ynotes.schema.json`).
 - The store's `.gitattributes`/`.gitignore` are now maintained line-by-line

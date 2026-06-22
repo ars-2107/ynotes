@@ -43,7 +43,7 @@ fn note_survives_save_and_reload() {
     let note = sample_note();
     store.save(&note).expect("save");
 
-    let reloaded = store.notes_for("src/app.rs").expect("notes_for");
+    let reloaded = store.notes_for("src/app.rs").expect("notes_for").notes;
     assert_eq!(reloaded.len(), 1);
     assert_eq!(reloaded[0], note);
     assert_eq!(
@@ -113,7 +113,7 @@ fn saving_identical_context_twice_is_idempotent() {
         "retry is a no-op"
     );
 
-    let notes = store.notes_for("src/app.rs").expect("notes_for");
+    let notes = store.notes_for("src/app.rs").expect("notes_for").notes;
     assert_eq!(notes.len(), 1, "no duplicate from a retried save");
 }
 
@@ -121,7 +121,13 @@ fn saving_identical_context_twice_is_idempotent() {
 fn unknown_target_yields_no_notes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = Store::init(dir.path()).expect("init");
-    assert!(store.notes_for("nope.rs").expect("notes_for").is_empty());
+    assert!(
+        store
+            .notes_for("nope.rs")
+            .expect("notes_for")
+            .notes
+            .is_empty()
+    );
 }
 
 #[test]
@@ -145,7 +151,7 @@ fn save_superseding_replaces_an_earlier_note_at_the_same_location() {
         "the earlier note at this location is retired"
     );
 
-    let notes = store.notes_for("src/app.rs").expect("notes_for");
+    let notes = store.notes_for("src/app.rs").expect("notes_for").notes;
     assert_eq!(notes.len(), 1, "only the latest note survives");
     assert_eq!(notes[0], second, "the survivor is the revised note");
 }
@@ -227,6 +233,6 @@ fn save_superseding_is_a_no_op_for_identical_content() {
     assert!(!created, "an identical re-save creates nothing");
     assert_eq!(superseded, 0, "an identical re-save supersedes nothing");
 
-    let notes = store.notes_for("src/app.rs").expect("notes_for");
+    let notes = store.notes_for("src/app.rs").expect("notes_for").notes;
     assert_eq!(notes.len(), 1, "still exactly one note");
 }

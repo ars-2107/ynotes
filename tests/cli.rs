@@ -68,7 +68,7 @@ fn doctor_json_emits_a_machine_readable_report() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     // Envelope: every --json output rides inside `{success, v, data}`.
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(7));
+    assert_eq!(parsed["v"], serde_json::json!(8));
     let data = &parsed["data"];
     assert!(data.get("version").is_some(), "version key present");
     assert!(data.get("platform").is_some(), "platform key present");
@@ -193,7 +193,7 @@ fn save_then_query_round_trips_through_the_binary() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(7));
+    assert_eq!(parsed["v"], serde_json::json!(8));
     // v=5 unified `query`'s matched/orphaned split into a single `notes`
     // array (status discriminates) — match the new shape here.
     assert_eq!(
@@ -1023,7 +1023,7 @@ fn clap_missing_arg_with_json_emits_failure_envelope_on_stdout() {
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("clap usage errors under --json must emit a valid JSON envelope");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(7));
+    assert_eq!(parsed["v"], serde_json::json!(8));
     assert_eq!(parsed["type"], serde_json::json!("usage"));
     assert!(
         !parsed["error"].as_str().unwrap().is_empty(),
@@ -1048,7 +1048,7 @@ fn clap_unknown_subcommand_with_json_emits_failure_envelope_on_stdout() {
     let parsed: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("valid JSON envelope on stdout");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(7));
+    assert_eq!(parsed["v"], serde_json::json!(8));
     assert_eq!(parsed["type"], serde_json::json!("usage"));
 }
 

@@ -96,6 +96,38 @@ struct IndexLine {
     id: String,
 }
 
+/// A note record the index points at that could not be read or parsed as a
+/// [`Note`].
+///
+/// Surfaced by the read paths rather than dropped or made fatal: one corrupt
+/// record must neither sink an otherwise healthy read nor hide behind it
+/// (invariant #4). Mirrors [`ReindexReport::malformed`]'s posture, carried
+/// through to the reads an agent actually queries.
+#[derive(Debug, Clone)]
+pub struct MalformedNote {
+    /// The id the index filed this record under (its on-disk filename stem).
+    pub id: String,
+    /// The target path the index grouped it beneath.
+    pub target: String,
+    /// Why the record could not be read or parsed. Free-form, for display —
+    /// not a stable key to branch on (the presence of an entry is the signal).
+    pub error: String,
+}
+
+/// The outcome of reading the notes for a target (or the whole store): the
+/// records that parsed cleanly, plus any that did not.
+///
+/// Replaces a bare `Vec<Note>` so a malformed record travels alongside the
+/// healthy ones — skipped from `notes`, surfaced in `malformed`, never the
+/// cause of a hard failure.
+#[derive(Debug, Clone, Default)]
+pub struct NoteScan {
+    /// Records that parsed cleanly, in index order.
+    pub notes: Vec<Note>,
+    /// Records the index pointed at but which could not be read or parsed.
+    pub malformed: Vec<MalformedNote>,
+}
+
 /// A handle to an opened store, identified by its `.ynotes` directory.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -132,6 +164,55 @@ pub struct ReindexReport {
     /// readable note is never dropped, and an unreadable one is never hidden
     /// (invariant #4).
     pub malformed: Vec<PathBuf>,
+}
+
+/// The result of scanning `notes/` and diffing it against the index, shared by
+/// [`Store::reindex`] and [`Store::health`]. Private: the two public callers
+/// each project it into their own report ([`ReindexReport`]/[`StoreHealth`]).
+struct ScanOutcome {
+    /// The `target -> [id]` map rebuilt from the records on disk.
+    rebuilt: IndexMap,
+    /// Note records read successfully while scanning `notes/`.
+    scanned: usize,
+    /// Distinct notes found on disk (the rebuilt index's entry count).
+    indexed: usize,
+    /// Ids on disk the current index did not list (recoverable pointers).
+    recovered: Vec<String>,
+    /// Ids the current index listed with no file behind them (dangling).
+    dangling: Vec<String>,
+    /// Files under `notes/` that could not be read or parsed as a note.
+    malformed: Vec<PathBuf>,
+}
+
+/// A read-only health report on the store, produced by [`Store::health`] and
+/// rendered by `ynotes doctor`. Empty across the board on a sound store.
+#[derive(Debug, Clone)]
+pub struct StoreHealth {
+    /// Records under `notes/` that could not be read or parsed as a note —
+    /// present but corrupt. Skipped by the read paths and surfaced here so a
+    /// corrupt record is visible rather than silently dropped (invariant #4).
+    pub malformed: Vec<PathBuf>,
+    /// How far the index cache has drifted from the notes on disk.
+    pub index: IndexHealth,
+    /// Managed `.gitattributes` lines absent from `.ynotes/.gitattributes`. A
+    /// non-empty list on a shared store means the merge guards are not in
+    /// force (`init`/`reindex` re-add them).
+    pub gitattributes_missing: Vec<String>,
+}
+
+/// How far the by-path index has drifted from the note records on disk. Both
+/// zero on a sound store. Surfaced as counts (not id lists) because `doctor`'s
+/// job is to flag the *condition*; `reindex` reports and repairs the specifics.
+#[derive(Debug, Clone, Copy)]
+pub struct IndexHealth {
+    /// Ids present on disk but missing from the index — pointers a reindex
+    /// would restore.
+    pub recovered: usize,
+    /// Index pointers with no file behind them at all — a reindex would drop
+    /// them. A present-but-unreadable record is *not* counted here (it is
+    /// reported under [`StoreHealth::malformed`]); this is strictly the
+    /// missing-file case.
+    pub dangling: usize,
 }
 
 impl Store {
@@ -347,7 +428,10 @@ impl Store {
         let created = self.save(note)?;
 
         let mut superseded = 0;
-        for prior in self.notes_for(&note.target)? {
+        // A malformed prior at this location cannot be matched (it will not
+        // parse), so it is not superseded here — it stays on disk for `reindex`
+        // to surface. Superseding a record we cannot read would be guesswork.
+        for prior in self.notes_for(&note.target)?.notes {
             let same_location = prior.scope == note.scope
                 && prior.bundle.position.range == note.bundle.position.range;
             if same_location && prior.id != note.id {
@@ -373,48 +457,79 @@ impl Store {
     }
 
     /// Every note whose target is `target` (store-root-relative,
-    /// forward-slash). A note id present in the index but missing on disk is
-    /// skipped with a warning rather than failing the whole query — the index
-    /// is a cache and must not be able to sink a query.
+    /// forward-slash), split into the records that parsed and the ones that
+    /// did not.
+    ///
+    /// Two failure modes of an individual record are tolerated rather than
+    /// allowed to sink the read — the index is a cache and a single bad record
+    /// must not be able to fail an otherwise healthy query:
+    ///
+    /// - An id present in the index but **missing on disk** is skipped with a
+    ///   warning (a dangling pointer the next `reindex` drops; not user data).
+    /// - A record present but **unreadable or unparseable** is skipped *and*
+    ///   surfaced in [`NoteScan::malformed`], so it is neither dropped nor
+    ///   hidden (invariant #4). The remedy rides in the warning: run a reindex.
+    ///
+    /// A broken **index** (as opposed to a broken note) is a different class
+    /// and still propagates — see [`Error::IndexMalformed`]/[`Error::IndexMissing`];
+    /// `reindex` is its remedy.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] if the index or a present note file is
-    /// unreadable as JSON, or [`Error::Io`] on a read failure other than a
-    /// missing note file.
-    pub fn notes_for(&self, target: &str) -> Result<Vec<Note>> {
+    /// Returns [`Error::IndexMalformed`]/[`Error::IndexMissing`] if the index
+    /// itself is unreadable, or [`Error::Io`] if the index file cannot be read
+    /// for a reason other than absence. A malformed *note* is reported in
+    /// [`NoteScan::malformed`], never surfaced as an error.
+    pub fn notes_for(&self, target: &str) -> Result<NoteScan> {
         let index = self.read_index()?;
         let Some(ids) = index.get(target) else {
-            return Ok(Vec::new());
+            return Ok(NoteScan::default());
         };
-        let mut notes = Vec::with_capacity(ids.len());
+        let mut scan = NoteScan {
+            notes: Vec::with_capacity(ids.len()),
+            malformed: Vec::new(),
+        };
         for id in ids {
             match self.read_note(id) {
-                Ok(note) => notes.push(note),
+                Ok(note) => scan.notes.push(note),
                 Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
                     tracing::warn!(
                         note = %id,
                         "indexed note missing on disk; skipping (run a reindex)"
                     );
                 }
-                Err(other) => return Err(other),
+                Err(error) => {
+                    tracing::warn!(
+                        note = %id,
+                        %error,
+                        "unreadable note record; skipping (run a reindex)"
+                    );
+                    scan.malformed.push(MalformedNote {
+                        id: id.clone(),
+                        target: target.to_owned(),
+                        error: error.to_string(),
+                    });
+                }
             }
         }
-        Ok(notes)
+        Ok(scan)
     }
 
-    /// Every note in the store, in index order.
+    /// Every note in the store, in index order, split into parsed records and
+    /// malformed ones (the malformed lists aggregated across targets).
     ///
     /// # Errors
     ///
     /// As [`Store::notes_for`].
-    pub fn all_notes(&self) -> Result<Vec<Note>> {
+    pub fn all_notes(&self) -> Result<NoteScan> {
         let index = self.read_index()?;
-        let mut notes = Vec::new();
+        let mut scan = NoteScan::default();
         for target in index.keys() {
-            notes.extend(self.notes_for(target)?);
+            let mut t = self.notes_for(target)?;
+            scan.notes.append(&mut t.notes);
+            scan.malformed.append(&mut t.malformed);
         }
-        Ok(notes)
+        Ok(scan)
     }
 
     /// Every note whose id starts with `prefix` (case-sensitive hex), in
@@ -422,15 +537,19 @@ impl Store {
     /// returns 0/1/many so the caller can render the right diagnostic
     /// ("no match", "ambiguous — N candidates", or proceed).
     ///
-    /// An index pointer that no longer resolves to a file on disk is skipped
-    /// with a `tracing::warn!`, mirroring [`Store::notes_for`]'s posture: a
-    /// corrupt index must not be able to sink a lookup.
+    /// A record the index points at that no longer resolves to a file on disk,
+    /// or that cannot be read or parsed, is skipped with a `tracing::warn!`,
+    /// mirroring [`Store::notes_for`]'s posture: a corrupt record must not be
+    /// able to sink a lookup. A consequence is that a *malformed* note cannot
+    /// be selected by id-prefix (it cannot be read to match) — `delete`/`update`
+    /// therefore cannot reach it; the remedy is `reindex` (or a manual fix),
+    /// and `doctor`/`reindex` surface that such a record exists.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] if the index or a present note record is
-    /// unreadable as JSON, or [`Error::Io`] on a read failure other than a
-    /// missing note file.
+    /// Returns [`Error::IndexMalformed`]/[`Error::IndexMissing`] if the index
+    /// itself is unreadable, or [`Error::Io`] if it cannot be read for a reason
+    /// other than absence. A malformed *note* is skipped, never an error.
     pub fn find_by_id_prefix(&self, prefix: &str) -> Result<Vec<Note>> {
         let index = self.read_index()?;
         let mut matches = Vec::new();
@@ -447,7 +566,13 @@ impl Store {
                                 "indexed note missing on disk; skipping (run a reindex)"
                             );
                         }
-                        Err(other) => return Err(other),
+                        Err(error) => {
+                            tracing::warn!(
+                                note = %id,
+                                %error,
+                                "unreadable note record; skipping (run a reindex)"
+                            );
+                        }
                     }
                 }
             }
@@ -532,125 +657,226 @@ impl Store {
     /// [`ReindexReport::malformed`], not surfaced as an error.
     pub fn reindex(&self, dry_run: bool) -> Result<ReindexReport> {
         self.with_index_lock(|| {
-            // The notes on disk are the source of truth; reindex must run even
-            // when the cache it is rebuilding is itself unreadable (a mangled
-            // merge, a hand-edit). A malformed index is treated as an empty
-            // baseline so every on-disk note shows up as `recovered`; a genuine
-            // I/O failure still propagates.
-            let previous: std::collections::BTreeSet<String> = match self.read_index() {
-                Ok(index) => index.into_values().flatten().collect(),
-                Err(Error::IndexMalformed { .. } | Error::IndexMissing { .. }) => {
-                    tracing::warn!("existing index is unreadable; rebuilding from notes/");
-                    std::collections::BTreeSet::new()
-                }
-                Err(other) => return Err(other),
-            };
+            let scan = self.compute_scan()?;
+            if !dry_run {
+                self.write_index(&scan.rebuilt)?;
+                self.write_git_config_files()?;
+            }
+            Ok(ReindexReport {
+                dry_run,
+                scanned: scan.scanned,
+                indexed: scan.indexed,
+                recovered: scan.recovered,
+                dangling: scan.dangling,
+                malformed: scan.malformed,
+            })
+        })
+    }
 
-            let mut rebuilt = IndexMap::new();
-            // The distinct ids seen on disk. Doubles as the dedup guard during
-            // the walk and as the `current` set for the recovered/dangling diff
-            // afterwards, so a content id is indexed exactly once.
-            let mut seen = std::collections::BTreeSet::new();
-            let mut scanned = 0usize;
-            let mut malformed = Vec::new();
+    /// Walk `notes/` and diff the records found against the current index,
+    /// without writing anything or taking the lock. The shared core of both
+    /// [`Store::reindex`] (which wraps it in the lock and then writes the
+    /// rebuilt index) and [`Store::health`] (which only reports the diff).
+    ///
+    /// Because it takes no lock it is *not* an atomic snapshot of `notes/`; the
+    /// races [`Store::reindex`] documents apply, all benign — a read-only
+    /// caller tolerates a transient over/under-count, and `reindex` re-runs the
+    /// same scan under the lock before it commits.
+    ///
+    /// A malformed index is treated as an empty baseline (so every on-disk note
+    /// shows up as `recovered`) rather than an error: the notes are the source
+    /// of truth, and this is exactly the corruption a rebuild exists to repair.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if a `notes/` directory cannot be enumerated, or any index
+    /// read error other than the rebuildable [`Error::IndexMalformed`]/
+    /// [`Error::IndexMissing`]. A single unreadable *note* is collected into
+    /// [`ScanOutcome::malformed`], never surfaced as an error.
+    fn compute_scan(&self) -> Result<ScanOutcome> {
+        // The notes on disk are the source of truth; the scan must run even
+        // when the cache it diffs against is itself unreadable (a mangled
+        // merge, a hand-edit). A malformed index is treated as an empty
+        // baseline so every on-disk note shows up as `recovered`; a genuine
+        // I/O failure still propagates.
+        let previous: std::collections::BTreeSet<String> = match self.read_index() {
+            Ok(index) => index.into_values().flatten().collect(),
+            Err(Error::IndexMalformed { .. } | Error::IndexMissing { .. }) => {
+                tracing::warn!("existing index is unreadable; rebuilding from notes/");
+                std::collections::BTreeSet::new()
+            }
+            Err(other) => return Err(other),
+        };
 
-            let notes_dir = self.notes_dir();
-            match std::fs::read_dir(&notes_dir) {
-                Ok(prefixes) => {
-                    for prefix in prefixes {
-                        let prefix = prefix.map_err(|source| Error::Io {
-                            path: notes_dir.clone(),
-                            source,
-                        })?;
-                        let prefix_path = prefix.path();
-                        // Only the two-char fan-out directories hold notes;
-                        // ignore any stray file sitting at the top of `notes/`.
-                        if !prefix_path.is_dir() {
-                            continue;
-                        }
-                        for file in std::fs::read_dir(&prefix_path).map_err(|source| Error::Io {
+        let mut rebuilt = IndexMap::new();
+        // The distinct ids seen on disk. Doubles as the dedup guard during the
+        // walk and as the `current` set for the recovered/dangling diff
+        // afterwards, so a content id is indexed exactly once.
+        let mut seen = std::collections::BTreeSet::new();
+        let mut scanned = 0usize;
+        let mut malformed = Vec::new();
+
+        let notes_dir = self.notes_dir();
+        match std::fs::read_dir(&notes_dir) {
+            Ok(prefixes) => {
+                for prefix in prefixes {
+                    let prefix = prefix.map_err(|source| Error::Io {
+                        path: notes_dir.clone(),
+                        source,
+                    })?;
+                    let prefix_path = prefix.path();
+                    // Only the two-char fan-out directories hold notes; ignore
+                    // any stray file sitting at the top of `notes/`.
+                    if !prefix_path.is_dir() {
+                        continue;
+                    }
+                    for file in std::fs::read_dir(&prefix_path).map_err(|source| Error::Io {
+                        path: prefix_path.clone(),
+                        source,
+                    })? {
+                        let file = file.map_err(|source| Error::Io {
                             path: prefix_path.clone(),
                             source,
-                        })? {
-                            let file = file.map_err(|source| Error::Io {
-                                path: prefix_path.clone(),
-                                source,
-                            })?;
-                            let path = file.path();
-                            // A note record is `<rest>.json`. Skip anything
-                            // else — a tempfile caught mid-rename, an editor
-                            // backup, a nested directory.
-                            if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
-                                continue;
-                            }
-                            match Self::read_note_at(&path) {
-                                Ok(note) => {
-                                    scanned += 1;
-                                    if seen.insert(note.id.clone()) {
-                                        rebuilt.entry(note.target).or_default().push(note.id);
-                                    } else {
-                                        // Two files carry the same content id —
-                                        // only possible if a record was copied,
-                                        // since `save` writes one file per id.
-                                        // Index it once, but surface the
-                                        // duplicate: silently merging it would
-                                        // leave an unexplained `scanned` >
-                                        // `indexed` gap.
-                                        tracing::warn!(
-                                            path = %path.display(),
-                                            id = %note.id,
-                                            "duplicate note record on disk; indexing once (reindex)"
-                                        );
-                                    }
-                                }
-                                Err(error) => {
+                        })?;
+                        let path = file.path();
+                        // A note record is `<rest>.json`. Skip anything else —
+                        // a tempfile caught mid-rename, an editor backup, a
+                        // nested directory.
+                        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+                            continue;
+                        }
+                        match Self::read_note_at(&path) {
+                            Ok(note) => {
+                                scanned += 1;
+                                if seen.insert(note.id.clone()) {
+                                    rebuilt.entry(note.target).or_default().push(note.id);
+                                } else {
+                                    // Two files carry the same content id — only
+                                    // possible if a record was copied, since
+                                    // `save` writes one file per id. Index it
+                                    // once, but surface the duplicate: silently
+                                    // merging it would leave an unexplained
+                                    // `scanned` > `indexed` gap.
                                     tracing::warn!(
                                         path = %path.display(),
-                                        %error,
-                                        "unreadable note record; skipping (reindex)"
+                                        id = %note.id,
+                                        "duplicate note record on disk; indexing once (reindex)"
                                     );
-                                    malformed.push(path);
                                 }
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    path = %path.display(),
+                                    %error,
+                                    "unreadable note record; skipping (reindex)"
+                                );
+                                malformed.push(path);
                             }
                         }
                     }
                 }
-                // No `notes/` directory: the store holds nothing, so it
-                // reindexes to an empty index rather than erroring — the goal
-                // state is reachable.
-                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
-                Err(source) => {
-                    return Err(Error::Io {
-                        path: notes_dir,
-                        source,
-                    });
-                }
             }
-
-            // `write_index` sorts/dedups on write, so no explicit sort here.
-
-            // `seen` is exactly the distinct ids found on disk. `BTreeSet`'s
-            // `difference` yields ascending order, so both lists are
-            // deterministic without an extra sort.
-            let current = seen;
-            let recovered = current.difference(&previous).cloned().collect();
-            let dangling = previous.difference(&current).cloned().collect();
-            let indexed = current.len();
-
-            if !dry_run {
-                self.write_index(&rebuilt)?;
-                self.write_git_config_files()?;
+            // No `notes/` directory: the store holds nothing, so it scans to an
+            // empty result rather than erroring — the goal state is reachable.
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(Error::Io {
+                    path: notes_dir,
+                    source,
+                });
             }
+        }
 
-            Ok(ReindexReport {
-                dry_run,
-                scanned,
-                indexed,
-                recovered,
-                dangling,
-                malformed,
-            })
+        // `seen` is exactly the distinct ids found on disk. `BTreeSet`'s
+        // `difference` yields ascending order, so both lists are deterministic
+        // without an extra sort.
+        let current = seen;
+        let recovered = current.difference(&previous).cloned().collect();
+        let dangling = previous.difference(&current).cloned().collect();
+        let indexed = current.len();
+
+        Ok(ScanOutcome {
+            rebuilt,
+            scanned,
+            indexed,
+            recovered,
+            dangling,
+            malformed,
         })
+    }
+
+    /// A read-only health report on the store: malformed records, index drift,
+    /// and any missing managed `.gitattributes` lines. The backing for
+    /// `ynotes doctor`'s health block.
+    ///
+    /// Strictly read-only and **lock-free** — it writes nothing and does not
+    /// take the index lock, so it honours `doctor`'s "mutates nothing" contract
+    /// (a diagnostic must not perturb what it diagnoses). Being lock-free it is
+    /// best-effort under concurrent writers; for a one-shot `doctor` that is the
+    /// right trade.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if a `notes/` directory or `.gitattributes` cannot be
+    /// read for a reason other than absence. A malformed index is treated as
+    /// empty (it is what this diagnoses, not an error), and an unreadable note
+    /// is reported in [`StoreHealth::malformed`] rather than surfaced as an
+    /// error.
+    pub fn health(&self) -> Result<StoreHealth> {
+        let scan = self.compute_scan()?;
+        // A malformed file's id is in the index (it was a real note) but absent
+        // from the rebuilt set (it would not parse), so the recovered/dangling
+        // diff counts it as `dangling`. For a *diagnostic* that double-counts
+        // one bad record as both `malformed` and `dangling`. Attribute it to
+        // exactly one bucket — `malformed` — by excluding malformed-file ids
+        // (recoverable from the filename) from the dangling count, so `dangling`
+        // means strictly "an index pointer with no file behind it at all".
+        let malformed_ids: std::collections::BTreeSet<String> = scan
+            .malformed
+            .iter()
+            .filter_map(|p| Self::id_from_note_path(p))
+            .collect();
+        let dangling = scan
+            .dangling
+            .iter()
+            .filter(|id| !malformed_ids.contains(id.as_str()))
+            .count();
+        Ok(StoreHealth {
+            malformed: scan.malformed,
+            index: IndexHealth {
+                recovered: scan.recovered.len(),
+                dangling,
+            },
+            gitattributes_missing: self.missing_gitattributes()?,
+        })
+    }
+
+    /// The managed `.gitattributes` lines absent from `.ynotes/.gitattributes`
+    /// — the read-only counterpart of [`Self::write_git_config_files`]. A
+    /// non-empty result on a *shared* store means the merge guards (the
+    /// `merge=union` index and the `notes/** -merge` rule) are not in force, so
+    /// a future merge could corrupt the store; `init`/`reindex` re-add them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the file exists but cannot be read.
+    fn missing_gitattributes(&self) -> Result<Vec<String>> {
+        let path = self.root.join(".gitattributes");
+        let existing = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(source) => return Err(Error::Io { path, source }),
+        };
+        let has_pattern = |pat: &str| {
+            existing
+                .lines()
+                .any(|l| l.split_whitespace().next() == Some(pat))
+        };
+        Ok(GITATTRIBUTES_MANAGED
+            .iter()
+            .filter(|m| !has_pattern(m.pattern))
+            .map(|m| m.line.to_owned())
+            .collect())
     }
 
     fn notes_dir(&self) -> PathBuf {
@@ -701,6 +927,24 @@ impl Store {
     fn note_path(&self, id: &str) -> PathBuf {
         let (prefix, rest) = id.split_at(2);
         self.notes_dir().join(prefix).join(format!("{rest}.json"))
+    }
+
+    /// The note id a `notes/<aa>/<rest>.json` path encodes — the inverse of
+    /// [`Self::note_path`] — if the path has that shape and yields a
+    /// 64-character lowercase-hex id.
+    ///
+    /// A malformed file cannot be parsed for its id from the inside, but its
+    /// *filename* still carries it. [`Self::health`] uses this to attribute a
+    /// corrupt record to its id, so it can keep that record out of the
+    /// `dangling` count (it belongs in `malformed`). Returns `None` for any
+    /// path that does not look like a record, so a stray file is never mistaken
+    /// for one.
+    fn id_from_note_path(path: &Path) -> Option<String> {
+        let rest = path.file_stem()?.to_str()?;
+        let prefix = path.parent()?.file_name()?.to_str()?;
+        let id = format!("{prefix}{rest}");
+        let is_id = id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        is_id.then_some(id)
     }
 
     fn read_note(&self, id: &str) -> Result<Note> {
