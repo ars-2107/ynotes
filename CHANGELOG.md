@@ -44,6 +44,14 @@ explicitly here.
   previously told the user to "run `ynotes reindex`", but `reindex` rebuilds the
   index and never removes a malformed file, so the record kept resurfacing. They
   now point at `ynotes delete <full-id>`, the verb that actually clears it.
+- `reanchor` no longer churns the on-disk filename of a note that did not move.
+  Because the id is content-hashed over the whole selector bundle, refreshing
+  volatile bundle state (the file's line count, the HEAD commit) used to rotate
+  the id and rewrite the record under a new name with no logical change.
+  `reanchor` now refreshes only a note that actually *relocated* (its anchor
+  resolves to a different range); an unmoved note keeps its id and its file. A
+  trade: an unmoved note's git baseline is no longer refreshed, so R1 transports
+  it from an older commit (still correct, marginally more work).
 
 ### Changed
 - `--json` agent contract bumped to `v: 9` (adds the always-present

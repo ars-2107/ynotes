@@ -129,10 +129,13 @@ file in a week?* If yes, leave a note. If no, skip.
   so retrying a tool call is safe. Editing the body makes a *new* note that
   supersedes the old — the earlier note at that location is retired, not left
   beside it.
-- **Note ids rotate on `reanchor` and `update`.** The id is content-hashed
-  over `(target, scope, bundle, body)`, so refreshing the anchor or replacing
-  the body changes the id. To cache a stable handle to a note across
-  reanchors, use the `(target, scope, body)` tuple — not the id.
+- **Note ids rotate on `update`, and on `reanchor` only when a note moved.**
+  The id is content-hashed over `(target, scope, bundle, body)`, so replacing
+  the body (always) or refreshing the anchor of a *relocated* note changes the
+  id. A note that still resolves to where it was captured is left untouched, so
+  its id stays stable across reanchors of unchanged code (no filename churn).
+  To cache a handle to a note across edits, use the `(target, scope, body)`
+  tuple — not the id.
 - **Branch on `status`.** Each queried note carries `status` —
   `anchored`, `drifted`, or `orphaned` — and a convenience `stale` boolean
   (`false` only for `anchored`). There is no numeric confidence: the category

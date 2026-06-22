@@ -77,6 +77,97 @@ fn reanchor_refreshes_a_drifted_note_and_is_idempotent() {
     assert_eq!(again.unchanged, 1);
 }
 
+/// R2 regression: `reanchor` must not rewrite a note that did not move. The id
+/// is content-addressed over the whole selector bundle, so volatile bundle
+/// state — here the file's line count, after appending a line far below the
+/// note — used to rotate the id and churn the on-disk filename even though the
+/// region never moved. `reanchor` now refreshes only a note that actually
+/// relocated (resolved range != stored range), so an unmoved note keeps its id
+/// and its file.
+#[test]
+fn reanchor_leaves_an_unmoved_note_untouched_when_only_the_file_grew() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    let file = dir.path().join("lib.rs");
+
+    // A distinctive region at the top, with enough lines below it that
+    // appending at the end touches neither the region nor its 3-line suffix.
+    std::fs::write(
+        &file,
+        "fn target_one() {}\nfn target_two() {}\nfn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn e() {}\n",
+    )
+    .unwrap();
+    let original = save_note(&store, &file, LineRange::new(1, 2).unwrap(), "top region");
+
+    // Append a line at the very end: the note's region (1:2) does not move, but
+    // the file's line count changes — the volatile bundle state that used to
+    // rotate the id.
+    std::fs::write(
+        &file,
+        "fn target_one() {}\nfn target_two() {}\nfn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn e() {}\nfn appended() {}\n",
+    )
+    .unwrap();
+
+    let report = reanchor(&store, false).unwrap();
+    assert_eq!(report.changed.len(), 0, "an unmoved note is not rewritten");
+    assert_eq!(report.unchanged, 1, "it is reported as already current");
+
+    let live = store.notes_for("lib.rs").unwrap().notes;
+    assert_eq!(
+        live.len(),
+        1,
+        "no churn: one note, not a new id beside the old"
+    );
+    assert_eq!(live[0].id, original.id, "the unmoved note keeps its id");
+}
+
+/// The other side of the R2 guard: a note whose region text is *edited in place*
+/// (same line range, changed content) must still be refreshed — its `quote` has
+/// to track the current code, or a later move would orphan it needlessly. The
+/// skip is only for an unchanged region, not for any same-range resolution.
+#[test]
+fn reanchor_refreshes_a_note_whose_region_was_edited_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    let file = dir.path().join("lib.rs");
+
+    std::fs::write(
+        &file,
+        "fn one() {}\nfn target() {\n    work();\n}\nfn z() {}\n",
+    )
+    .unwrap();
+    let original = save_note(&store, &file, LineRange::new(2, 4).unwrap(), "hot path");
+
+    // Edit the body of the noted region without changing its line count: the
+    // note still resolves to 2:4 (structural/position), but its text changed.
+    std::fs::write(
+        &file,
+        "fn one() {}\nfn target() {\n    work_v2();\n}\nfn z() {}\n",
+    )
+    .unwrap();
+
+    let report = reanchor(&store, false).unwrap();
+    assert_eq!(
+        report.changed.len(),
+        1,
+        "an in-place content edit is refreshed"
+    );
+    assert_eq!(report.unchanged, 0);
+
+    let live = store.notes_for("lib.rs").unwrap().notes;
+    assert_eq!(live.len(), 1, "superseded, not duplicated");
+    assert_ne!(
+        live[0].id, original.id,
+        "the refreshed bundle yields a new id"
+    );
+    assert!(
+        live[0].bundle.quote.exact.contains("work_v2"),
+        "the stored quote now matches the current code: {}",
+        live[0].bundle.quote.exact
+    );
+    assert_eq!(live[0].created_at, original.created_at, "provenance kept");
+}
+
 #[test]
 fn reanchor_never_touches_an_orphaned_note() {
     let dir = tempfile::tempdir().unwrap();
@@ -122,6 +213,17 @@ fn git_hit(bundle: &SelectorBundle, source: &SourceFile, ctx: &GitContext) -> Op
             RungResult::Hit { range, .. } => Some(range),
             _ => None,
         })
+}
+
+/// The repo's current HEAD commit id (full SHA), trimmed.
+fn git_head(dir: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("git rev-parse");
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
 /// `reanchor` against a *dirty* working tree must not desync the git rung.
@@ -198,6 +300,96 @@ fn reanchor_on_a_dirty_tree_keeps_the_git_rung_consistent() {
         git_hit(&refreshed.bundle, &committed, &ctx),
         Some(LineRange::new(8, 11).unwrap()),
         "the git rung stays correct after the edit is committed"
+    );
+}
+
+/// R2 trade, verified: when `reanchor` leaves an unmoved, unedited note alone,
+/// its git baseline *ages* — it keeps pointing at the commit it was captured
+/// against even as HEAD advances. This proves the ageing is safe: the note's id
+/// does not churn, and it still resolves correctly, with the git rung still
+/// transporting it across the now-older baseline.
+#[test]
+fn an_unmoved_notes_git_baseline_ages_but_it_still_resolves() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    if !git(root, &["init", "-q"]) {
+        eprintln!("skipping: no usable `git` binary");
+        return;
+    }
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    let file = root.join("s.rs");
+    std::fs::write(
+        &file,
+        "fn alpha() {\n    let x = 1;\n}\n\nfn beta() {\n    let y = 2;\n    let q = y;\n}\n",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    if !git(root, &["commit", "-q", "-m", "initial"]) {
+        eprintln!("skipping: git commit unavailable in this environment");
+        return;
+    }
+    let baseline = git_head(root);
+
+    let store = Store::init(root).unwrap();
+    // A note on the whole of `beta()` (lines 5:8), anchored against `baseline`.
+    let saved = save_note(&store, &file, LineRange::new(5, 8).unwrap(), "beta region");
+    assert_eq!(
+        saved.bundle.git.as_ref().map(|g| g.commit.as_str()),
+        Some(baseline.as_str()),
+        "the note is anchored to the commit it was saved against"
+    );
+
+    // Advance HEAD with an unrelated commit: append `gamma()` far below
+    // `beta()`, so `beta()` does not move.
+    std::fs::write(
+        &file,
+        "fn alpha() {\n    let x = 1;\n}\n\nfn beta() {\n    let y = 2;\n    let q = y;\n}\n\nfn gamma() {\n    let z = 3;\n}\n",
+    )
+    .unwrap();
+    git(root, &["add", "s.rs"]);
+    git(root, &["commit", "-q", "-m", "add gamma"]);
+    assert_ne!(baseline, git_head(root), "HEAD advanced");
+
+    // `beta()` is unmoved and unedited, so `reanchor` leaves the note alone —
+    // its baseline is NOT refreshed to the new HEAD.
+    let report = reanchor(&store, false).unwrap();
+    assert_eq!(report.changed.len(), 0, "the unmoved note is not rewritten");
+    assert_eq!(report.unchanged, 1);
+
+    let live = store
+        .notes_for("s.rs")
+        .unwrap()
+        .notes
+        .pop()
+        .expect("one note");
+    assert_eq!(live.id, saved.id, "id unchanged — no churn");
+    assert_eq!(
+        live.bundle.git.as_ref().map(|g| g.commit.as_str()),
+        Some(baseline.as_str()),
+        "baseline aged: still the original commit, not the new HEAD"
+    );
+
+    // Despite the aged baseline, the note still resolves to `beta()`'s true
+    // location. The git rung still transports from the older baseline (it
+    // hits), but ageing costs it some precision — appending `gamma()` right
+    // after the region makes R1 over-extend to 5:12; the ladder reconciles that
+    // against the other rungs back to the correct 5:8. That the combined verdict
+    // is right *because* the rungs disagree-and-vote is exactly why the ageing
+    // trade is safe.
+    let ctx = GitContext::discover(root).expect("repo discovered");
+    let src = SourceFile::read(&file).unwrap();
+    let res = resolve(&live.bundle, &src, Some(&ctx));
+    assert_eq!(
+        res.range,
+        Some(LineRange::new(5, 8).unwrap()),
+        "the note still resolves to its region after the baseline aged"
+    );
+    assert!(
+        git_hit(&live.bundle, &src, &ctx).is_some(),
+        "R1 still transports (hits) from the older baseline commit"
     );
 }
 

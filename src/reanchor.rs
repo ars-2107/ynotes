@@ -100,10 +100,14 @@ pub struct ReanchorReport {
     pub unchanged: usize,
 }
 
-/// Refreshes every note whose anchor still resolves — `anchored` or `drifted`
-/// — so future queries start from the current code rather than ever-staler
-/// original selectors. An orphaned note is left untouched for a human. With
-/// `dry_run`, computes the report but writes nothing.
+/// Refreshes every note whose own region changed — it moved (resolves to a
+/// different range) or its text was edited — so future queries start from the
+/// current code. A note whose region is unchanged *and* still in place is left
+/// untouched: rewriting it would refresh only ambient bundle state (the file's
+/// line count, the HEAD commit, distant context) and rotate its
+/// content-addressed id, churning the on-disk filename for no logical change
+/// (the R2 regression this guards). An orphaned note is likewise left for a
+/// human. With `dry_run`, computes the report but writes nothing.
 ///
 /// # Errors
 ///
@@ -174,13 +178,33 @@ pub fn reanchor(store: &Store, dry_run: bool) -> Result<ReanchorReport> {
         };
 
         let from = note.bundle.position.range;
-        let fresh = SelectorBundle::capture_full(&source, to)?;
-        let refreshed = note.clone().with_bundle(fresh)?;
-        if refreshed.id == note.id {
+        // Refresh only when the note's own region actually changed: it moved
+        // (`to != from`) or its text was edited (the quote differs). Either is a
+        // real change worth re-capturing every selector against. When the region
+        // is unchanged *and* still in place, only ambient state could differ
+        // (the file's line count, the HEAD commit, distant context); refreshing
+        // that would rotate the content-addressed id and churn the on-disk
+        // filename for no logical change — exactly the R2 case ("even when the
+        // code is unchanged"). Leave it untouched, accepting that its git
+        // baseline then ages (a mild trade: R1 still transports, from an older
+        // commit).
+        let region_unchanged = source.text(to).is_ok_and(|t| t == note.bundle.quote.exact);
+        if to == from && region_unchanged {
             report.unchanged += 1;
             continue;
         }
 
+        let fresh = SelectorBundle::capture_full(&source, to)?;
+        let refreshed = note.clone().with_bundle(fresh)?;
+        // Defensive backstop: a re-capture that somehow yields a bundle
+        // identical to the stored one (hence the same id) must not be written —
+        // `save` then `remove` on a single id would delete the record. Treat it
+        // as unchanged. (With the guard above this is unreachable for a real
+        // change, but it keeps the save/remove pair safe by construction.)
+        if refreshed.id == note.id {
+            report.unchanged += 1;
+            continue;
+        }
         if !dry_run {
             // Write the superseding note first, then retire the old one, so a
             // crash in between leaves both (index points at the new) rather
