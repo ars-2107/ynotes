@@ -119,6 +119,47 @@ const QUOTE_EXACT: u8 = 90;
 /// this only for a similarity of 1.0.
 const STRUCTURAL_INTACT: u8 = 95;
 
+/// Git-transport score at or above which the rung followed the region's *own
+/// surviving lines* to their new home, rather than merely echoing a
+/// deletion/modification point. An `Unchanged` transport (100) or a `Moved`
+/// one whose endpoint lines were untouched (90) tracked real content; a
+/// `touched` transport (70) carried a *replaced* range onto its change point —
+/// git's own low-confidence signal — and is no evidence the region is still
+/// there. Only a git witness at or above this bar may corroborate a moved
+/// fuzzy match in [`reconcile`] step 2. Below it, git echoes a line number
+/// without proving content — exactly the "carries a deleted range onto its
+/// deletion point" case the module doctrine says must never decide a verdict.
+const GIT_WITNESS_MIN: u8 = 90;
+
+/// Structural-rung score at or above which the hit re-located the *same
+/// construct in its original scope* — its ancestor chain matched exactly —
+/// rather than a same-named construct in a *different* scope (a sibling
+/// `Bar::build` when the note was on `Foo::build`). `structural_score` gives an
+/// exact-chain match at least this (0.80 → 79 when the body was edited, 1.0 →
+/// 95 when intact) and a different-chain namesake at most 71, so this bar
+/// separates the two cleanly. Only an exact-chain hit is independent evidence
+/// the *noted* construct is at fuzzy's location; a lower structural hit merely
+/// found a namesake elsewhere and must not witness a moved fuzzy match in
+/// [`reconcile`] step 2 — the structural twin of the touched-git case.
+const STRUCTURAL_WITNESS_MIN: u8 = 79;
+
+/// The false-positive bar a resolution runs under.
+///
+/// Same-file resolution and rename corroboration ask different questions, so
+/// they trust the fuzzy rung's "did not move" signal differently — see
+/// [`reconcile`] step 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolveMode {
+    /// Same-file resolution: a fuzzy hit at the saved line range is trusted as
+    /// "did not move" without an independent witness.
+    Normal,
+    /// Corroboration against a *renamed* destination: the saved line range
+    /// carries no meaning in a different file, so the "did not move" shortcut is
+    /// withheld and a moved fuzzy hit still needs an independent witness
+    /// (invariant #10).
+    Relocation,
+}
+
 /// Resolves where `bundle`'s region is in `file`, optionally using `git` for
 /// the R1 transport rung.
 ///
@@ -127,6 +168,30 @@ const STRUCTURAL_INTACT: u8 = 95;
 /// a caller to drop it.
 #[must_use]
 pub fn resolve(bundle: &SelectorBundle, file: &SourceFile, git: Option<&GitContext>) -> Resolution {
+    resolve_with(bundle, file, git, ResolveMode::Normal)
+}
+
+/// Resolves a note against a renamed destination, using only content evidence
+/// that is strong enough to migrate across a path boundary.
+///
+/// Rename following has a stricter false-positive bar than ordinary same-file
+/// resolution: a fuzzy hit at the saved line range is acceptable for an
+/// in-place edit, but not for proving the old file's note belongs to a new
+/// path. A same-line replacement after a rename can look similar enough to
+/// fuzzy while being unrelated code, so callers use this mode before surfacing
+/// or persisting a relocation.
+pub(crate) fn resolve_for_relocation(bundle: &SelectorBundle, file: &SourceFile) -> Resolution {
+    resolve_with(bundle, file, None, ResolveMode::Relocation)
+}
+
+/// Shared implementation behind [`resolve`] and [`resolve_for_relocation`]:
+/// runs each rung once and hands the outcomes to [`reconcile`] under `mode`.
+fn resolve_with(
+    bundle: &SelectorBundle,
+    file: &SourceFile,
+    git: Option<&GitContext>,
+    mode: ResolveMode,
+) -> Resolution {
     let saved = bundle.position.range;
     let rungs = vec![
         RungOutcome {
@@ -151,7 +216,7 @@ pub fn resolve(bundle: &SelectorBundle, file: &SourceFile, git: Option<&GitConte
         },
     ];
 
-    reconcile(saved, rungs)
+    reconcile(saved, rungs, mode)
 }
 
 /// R1: ask git to transport the region's baseline range to the working file.
@@ -649,11 +714,19 @@ fn rung_hit(rungs: &[RungOutcome], want: Rung) -> Option<(LineRange, u8)> {
 ///    LCS will happily land on a same-shaped sibling — a second
 ///    `function f(user) { … return signJwt(…); }` — so a fuzzy-only hit
 ///    that *moved* from the saved range demands corroboration from a rung
-///    whose evidence is independent of fuzzy itself: `git` transport, or
-///    `structural` at any score, with a range overlapping fuzzy's. Fuzzy
-///    hitting the *exact* saved range needs no such witness: it means the
-///    position-window scoring picked the saved offset over every other
-///    alignment, which is the rung's own evidence of "did not move."
+///    whose evidence is independent of fuzzy itself and re-located the *noted*
+///    region — not a look-alike: an *untouched* `git` transport (score
+///    `>= GIT_WITNESS_MIN` — one that followed surviving lines, not a
+///    `touched` transport that merely carried a replaced range onto its
+///    deletion point), or an *exact-chain* `structural` hit (score
+///    `>= STRUCTURAL_WITNESS_MIN` — the same construct in its original scope,
+///    not a same-named sibling elsewhere), with a range overlapping fuzzy's.
+///    In normal same-file resolution, fuzzy hitting the *exact* saved range
+///    needs no such witness: it means the position-window scoring picked the
+///    saved offset over every other alignment, which is the rung's own evidence
+///    of "did not move." Relocation mode disables that exception because a
+///    renamed file can replace the old region with similar, unrelated code at
+///    the same lines.
 ///    `position`, by contrast, *is* the saved range; treating its overlap
 ///    with fuzzy as corroboration is circular, so it is excluded.
 /// 3. **Located ⇒ anchored or drifted.** The range is taken from the most
@@ -661,7 +734,7 @@ fn rung_hit(rungs: &[RungOutcome], want: Rung) -> Option<(LineRange, u8)> {
 ///    `structural`. An exact quote at `QUOTE_EXACT`, or an identical
 ///    structural fingerprint, at the saved position is `anchored`; anything
 ///    else located is `drifted`.
-fn reconcile(saved: LineRange, rungs: Vec<RungOutcome>) -> Resolution {
+fn reconcile(saved: LineRange, rungs: Vec<RungOutcome>, mode: ResolveMode) -> Resolution {
     let quote = rung_hit(&rungs, Rung::Quote);
     let fuzzy = rung_hit(&rungs, Rung::Fuzzy);
     let structural = rung_hit(&rungs, Rung::Structural);
@@ -690,9 +763,19 @@ fn reconcile(saved: LineRange, rungs: Vec<RungOutcome>) -> Resolution {
     // witness here.
     if quote.is_none() && !structural_intact {
         if let Some((fr, _)) = fuzzy {
-            let stayed_put = fr == saved;
-            let independent = git.is_some_and(|(r, _)| r.overlaps(fr))
-                || structural.is_some_and(|(r, _)| r.overlaps(fr));
+            let stayed_put = mode == ResolveMode::Normal && fr == saved;
+            // A witness counts only if it re-located the *noted* region, not a
+            // look-alike. A git hit qualifies when it *followed surviving
+            // content* (score >= GIT_WITNESS_MIN); a `touched` transport (70)
+            // merely carried a replaced range onto its change point — the
+            // deletion-point echo the module doctrine forbids from deciding a
+            // verdict. A structural hit qualifies when its ancestor chain
+            // matched exactly (score >= STRUCTURAL_WITNESS_MIN); a lower,
+            // different-chain hit only found a same-named construct in another
+            // scope. Either low-confidence hit could otherwise rescue a fuzzy
+            // match that landed on a coincidental same-shaped sibling.
+            let independent = git.is_some_and(|(r, s)| s >= GIT_WITNESS_MIN && r.overlaps(fr))
+                || structural.is_some_and(|(r, s)| s >= STRUCTURAL_WITNESS_MIN && r.overlaps(fr));
             if !(stayed_put || independent) {
                 return Resolution {
                     range: None,

@@ -19,6 +19,17 @@ fn init(dir: &Path) {
     ynotes().current_dir(dir).arg("init").assert().success();
 }
 
+/// Run a git command in `dir` for harness setup (the rename conformance case);
+/// returns whether it succeeded, so a git-less environment can skip cleanly.
+fn git(dir: &Path, args: &[&str]) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 /// Compile the committed schema once. `validator_for` reads the draft from the
 /// schema's `$schema` (2020-12) and resolves the all-local `$ref`s.
 fn schema() -> Validator {
@@ -182,6 +193,58 @@ fn malformed_and_health_payloads_conform_to_the_schema() {
     assert_conforms(&v, "delete (unreadable purged)", &del);
 }
 
+/// The rename-following payloads (new in v10) must conform: `query`'s
+/// `relocated_from` on a note surfaced at a renamed path, and `reanchor`'s
+/// populated `relocated[]`. Both are gated by `additionalProperties: false`, so
+/// a schema that forgot either field would fail here rather than surprising an
+/// agent. Skips cleanly without a usable git binary.
+#[test]
+fn rename_following_payloads_conform_to_the_schema() {
+    let v = schema();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    if !git(p, &["init", "-q"]) {
+        eprintln!("skipping: no usable `git` binary");
+        return;
+    }
+    git(p, &["config", "user.email", "t@example.com"]);
+    git(p, &["config", "user.name", "Test"]);
+    std::fs::write(
+        p.join("old.rs"),
+        "fn a() {}\nfn target() {\n    work();\n}\n",
+    )
+    .unwrap();
+    git(p, &["add", "."]);
+    if !git(p, &["commit", "-q", "-m", "init"]) {
+        eprintln!("skipping: git commit unavailable");
+        return;
+    }
+    // Store created after the file is committed, so the saved note carries a git
+    // selector (the baseline the rename is followed from).
+    init(p);
+    run_json(p, &["save", "old.rs", "2", "-m", "load-bearing", "--json"]);
+    git(p, &["mv", "old.rs", "new.rs"]);
+    git(p, &["commit", "-q", "-m", "rename"]);
+
+    // query at the new path surfaces the note flagged `relocated_from`, before
+    // any reanchor migrates it — validate that populated shape.
+    let q = run_json(p, &["query", "new.rs", "2", "--json"]);
+    assert_eq!(
+        q["data"]["notes"][0]["relocated_from"].as_str(),
+        Some("old.rs"),
+        "the note surfaces at the new path flagged relocated_from: {q}"
+    );
+    assert_conforms(&v, "query (relocated_from present)", &q);
+
+    // reanchor migrates it, populating `relocated[]` — validate that shape.
+    let r = run_json(p, &["reanchor", "--json"]);
+    assert!(
+        !r["data"]["relocated"].as_array().unwrap().is_empty(),
+        "reanchor relocates the note: {r}"
+    );
+    assert_conforms(&v, "reanchor (relocated present)", &r);
+}
+
 #[test]
 fn failure_envelope_conforms_to_the_schema() {
     let v = schema();
@@ -206,7 +269,7 @@ fn the_validator_rejects_non_conforming_output() {
     // A success envelope whose `data` matches none of the payload `oneOf`
     // branches (each is `additionalProperties: false` with required fields).
     let unknown_payload = serde_json::json!({
-        "success": true, "v": 9, "data": { "not_a_real_payload": 1 }
+        "success": true, "v": 10, "data": { "not_a_real_payload": 1 }
     });
     assert!(
         v.iter_errors(&unknown_payload).next().is_some(),
@@ -223,7 +286,7 @@ fn the_validator_rejects_non_conforming_output() {
     // A query payload missing the now-required `malformed` array must fail —
     // this is exactly the drift the suite exists to catch.
     let missing_malformed = serde_json::json!({
-        "success": true, "v": 9,
+        "success": true, "v": 10,
         "data": { "query": { "file": "x", "at": "" }, "notes": [], "warnings": [] }
     });
     assert!(

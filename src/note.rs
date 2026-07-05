@@ -103,6 +103,31 @@ impl Note {
         })
     }
 
+    /// Produces the note that supersedes this one at a new `target`, with a
+    /// bundle re-captured against the file at that new path (used by `reanchor`
+    /// when it follows a file rename). `scope`, `body`, and `created_at` are
+    /// preserved — it is the *same* note, moved to where its code now lives —
+    /// so provenance survives the relocation; `updated_at` and the
+    /// content-addressed `id` are recomputed over the new `(target, bundle)`.
+    ///
+    /// The id necessarily changes (the target is part of the identity, invariant
+    /// #6), so a relocation is a new immutable record retiring the old one,
+    /// exactly as an in-place re-anchor is.
+    ///
+    /// # Errors
+    ///
+    /// As [`Note::new`]: [`Error::Invalid`] if the identity cannot be hashed.
+    pub fn relocated(self, target: String, bundle: SelectorBundle) -> Result<Self> {
+        let id = compute_id(&target, self.scope, &bundle, &self.body)?;
+        Ok(Self {
+            id,
+            target,
+            bundle,
+            updated_at: jiff::Timestamp::now(),
+            ..self
+        })
+    }
+
     /// Produces the note that supersedes this one with a refreshed `bundle`
     /// *and* a replaced `body` (used by `update`). `created_at` is preserved
     /// so the note's provenance survives the edit; `updated_at` and the

@@ -140,6 +140,12 @@ of these in the same change — agents must not leave any stale:
    `package.json` and every `npm/*/package.json` are generated from it by
    `scripts/sync-version.mjs`; the `version-sync` CI job fails on drift. Never
    hand-edit a version in an npm manifest.
+10. **A note only relocates to a renamed path when a content rung corroborates
+    the region there.** git's rename signal proposes the destination; a note is
+    moved (in `reanchor`) or surfaced there (in `query`) only if the ladder
+    then locates the region at the new path. A rename where the region was
+    deleted resolves `orphaned` and the note stays put — never welded onto the
+    renamed file at an unrelated line. This is the rename-side face of #4.
 
 ## Releases
 

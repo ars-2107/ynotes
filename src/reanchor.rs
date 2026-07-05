@@ -10,9 +10,12 @@
 //! for a human; welding a note to maybe-wrong code is precisely the silent
 //! failure invariant #4 forbids.
 
-use crate::anchor::resolve;
+use std::path::Path;
+
+use crate::anchor::{resolve, resolve_for_relocation};
 use crate::error::{Error, Result};
 use crate::git::GitContext;
+use crate::note::Note;
 use crate::selector::SelectorBundle;
 use crate::source::{LineRange, SourceFile};
 use crate::store::Store;
@@ -29,6 +32,30 @@ pub struct ReanchorChange {
     /// Where the note used to be anchored.
     pub from: LineRange,
     /// Where it is now.
+    pub to: LineRange,
+}
+
+/// A note that was (or, in a dry run, would be) moved to a renamed file: its
+/// target path changed because git detected the file was renamed, and a content
+/// rung corroborated the region at the new path.
+///
+/// Distinct from [`ReanchorChange`] because a relocation moves the note between
+/// files (its `target` changed), not just its position within one — the
+/// `--json` agent contract surfaces it as its own `relocated[]` partition so a
+/// consumer can branch on "the note moved files" separately.
+#[derive(Debug, Clone)]
+pub struct ReanchorRelocation {
+    /// The target path the note was filed under before the rename.
+    pub from_target: String,
+    /// The target path it now lives at (the file's current name).
+    pub to_target: String,
+    /// Id before relocating.
+    pub old_id: String,
+    /// Id after (content-addressed over the new target and refreshed bundle).
+    pub new_id: String,
+    /// Where the region sat in the old file at save time.
+    pub from: LineRange,
+    /// Where it resolved to in the renamed file.
     pub to: LineRange,
 }
 
@@ -94,6 +121,9 @@ pub struct ReanchorReport {
     pub dry_run: bool,
     /// Notes refreshed (or that would be).
     pub changed: Vec<ReanchorChange>,
+    /// Notes moved to a renamed file (or that would be), corroborated at the
+    /// new path.
+    pub relocated: Vec<ReanchorRelocation>,
     /// Notes left alone, with reasons.
     pub skipped: Vec<ReanchorSkip>,
     /// Notes already current (resolved to where they were captured).
@@ -123,6 +153,7 @@ pub fn reanchor(store: &Store, dry_run: bool) -> Result<ReanchorReport> {
     let mut report = ReanchorReport {
         dry_run,
         changed: Vec::new(),
+        relocated: Vec::new(),
         skipped: Vec::new(),
         unchanged: 0,
     };
@@ -153,11 +184,22 @@ pub fn reanchor(store: &Store, dry_run: bool) -> Result<ReanchorReport> {
         let source = match SourceFile::read(&abs) {
             Ok(s) => s,
             Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-                report.skipped.push(ReanchorSkip {
-                    target: note.target.clone(),
-                    id: note.id.clone(),
-                    reason: ReanchorSkipReason::MissingTarget,
-                });
+                // The target file is gone. Before giving up, ask git whether it
+                // was renamed and, if so, whether the region survived at the new
+                // path — the sole way a note migrates across a refactor.
+                match try_relocate(store, &note, &workdir, dry_run)? {
+                    RelocateOutcome::Relocated(r) => report.relocated.push(r),
+                    RelocateOutcome::Orphaned => report.skipped.push(ReanchorSkip {
+                        target: note.target.clone(),
+                        id: note.id.clone(),
+                        reason: ReanchorSkipReason::Orphaned,
+                    }),
+                    RelocateOutcome::NotRenamed => report.skipped.push(ReanchorSkip {
+                        target: note.target.clone(),
+                        id: note.id.clone(),
+                        reason: ReanchorSkipReason::MissingTarget,
+                    }),
+                }
                 continue;
             }
             Err(e) => return Err(e),
@@ -222,4 +264,116 @@ pub fn reanchor(store: &Store, dry_run: bool) -> Result<ReanchorReport> {
     }
 
     Ok(report)
+}
+
+/// The three outcomes of trying to follow a rename for a note whose target file
+/// is missing on disk.
+enum RelocateOutcome {
+    /// git detected a rename and a content rung corroborated the region at the
+    /// new path: the note was (or, in a dry run, would be) moved there.
+    Relocated(ReanchorRelocation),
+    /// git detected a rename but the region is gone at the new path (the file
+    /// was renamed *and* the region deleted): declined, an honest orphan rather
+    /// than a note welded to unrelated code (the wrong-file guard).
+    Orphaned,
+    /// No rename was detected — a genuine missing target.
+    NotRenamed,
+}
+
+/// Follow a file rename for a note whose target is missing, corroborating the
+/// region at the renamed path before moving anything.
+///
+/// The rename signal alone never moves a note: git proposes the destination,
+/// and only a content rung locating the region there (`resolve` returning a
+/// range) confirms the move. A destination where the region is gone yields
+/// [`RelocateOutcome::Orphaned`], never a relocation — the guard that keeps a
+/// rename from welding a note onto the wrong lines of the renamed file.
+///
+/// Detection needs the note's git selector (its baseline commit and old path);
+/// a note untracked at save time carries none, so it cannot be followed and is
+/// reported as a genuine missing target.
+///
+/// # Errors
+///
+/// [`Error::Invalid`]/[`Error::Io`] if the renamed file cannot be captured into
+/// a fresh bundle or the relocated note cannot be written.
+fn try_relocate(
+    store: &Store,
+    note: &Note,
+    workdir: &Path,
+    dry_run: bool,
+) -> Result<RelocateOutcome> {
+    // No git selector ⇒ untracked at save ⇒ no rename signal to follow.
+    let Some(gitsel) = note.bundle.git.as_ref() else {
+        return Ok(RelocateOutcome::NotRenamed);
+    };
+    let Some(ctx) = GitContext::discover(workdir) else {
+        return Ok(RelocateOutcome::NotRenamed);
+    };
+    // git reports the destination relative to the *git* root, which is not
+    // necessarily the store root, so rebuild the absolute path from the git
+    // root before translating it back to a store target.
+    let Some(new_git_rel) = ctx.renamed_to(&gitsel.commit, &gitsel.path) else {
+        return Ok(RelocateOutcome::NotRenamed);
+    };
+    let new_abs = ctx.root().join(&new_git_rel);
+
+    // `relativize` resolves symlinks and refuses a path outside the work tree,
+    // so it doubles as the store-target translation *and* the symlink-escape
+    // guard: a rename that lands outside the store (or via an escaping symlink)
+    // returns `OutsideStore`, and we decline rather than read foreign content
+    // into a committed bundle.
+    let Ok(new_target) = store.relativize(&new_abs) else {
+        return Ok(RelocateOutcome::NotRenamed);
+    };
+    // git named a destination but it is not a readable text file here — do not
+    // guess; leave the note as a missing target.
+    let Ok(new_source) = SourceFile::read(&new_abs) else {
+        return Ok(RelocateOutcome::NotRenamed);
+    };
+
+    // Corroborate in relocation mode (`resolve_for_relocation`): content rungs
+    // only, and no "did not move" shortcut. Two reasons the ordinary resolve is
+    // wrong here. First, the note's git selector still names the renamed-away
+    // *old* path, so the git rung would transport onto the deletion point and
+    // could falsely witness a moved fuzzy match near the top of the new file,
+    // welding the note to unrelated code (invariant #10) — hence no git context.
+    // Second, a fuzzy hit at the note's *saved* line numbers is not evidence in a
+    // *different* file: a rename that replaced the region in place would otherwise
+    // be accepted, so the saved-range exemption is dropped and such a hit needs an
+    // independent witness or orphans. Only rungs that search the new file's actual
+    // text may confirm the region is really here.
+    let Some(to) = resolve_for_relocation(&note.bundle, &new_source).range else {
+        // Renamed, but the region is gone at the new path: honest orphan.
+        return Ok(RelocateOutcome::Orphaned);
+    };
+
+    let fresh = SelectorBundle::capture_full(&new_source, to)?;
+    // Migrate only to a *committed* destination. `capture_full` attaches a git
+    // selector exactly when the new path is tracked at `HEAD`; its absence means
+    // the rename is only staged, not committed. Relocating there would produce a
+    // note with no git baseline — unable to follow a later rename and without the
+    // R1 transport rung — and reanchor's unchanged-region skip would never heal
+    // it after the commit. Defer instead: leave the note put (the `query`
+    // self-heal already serves reads at the new path) until the rename is
+    // committed, when this pass migrates it with a baseline intact.
+    if fresh.git.is_none() {
+        return Ok(RelocateOutcome::NotRenamed);
+    }
+    let relocated = note.clone().relocated(new_target.clone(), fresh)?;
+    if !dry_run {
+        // Write the relocated note first, then retire the old one, so a crash
+        // in between leaves both (indexed at the new path) rather than losing
+        // the note — the same ordering the in-place refresh path uses.
+        store.save(&relocated)?;
+        store.remove(note)?;
+    }
+    Ok(RelocateOutcome::Relocated(ReanchorRelocation {
+        from_target: note.target.clone(),
+        to_target: new_target,
+        old_id: note.id.clone(),
+        new_id: relocated.id.clone(),
+        from: note.bundle.position.range,
+        to,
+    }))
 }

@@ -88,6 +88,15 @@ moves), exact-text and fuzzy relocation — and reports its status:
 located; surfaced anyway with its last known position, never silently
 dropped).
 
+A note also survives a **file rename**. Query the new path and the note surfaces
+there, resolved against the current file and flagged `relocated_from` — for a
+staged rename too, so an agent working at the new path finds it immediately. Once
+the rename is committed, `reanchor` migrates the note to the new path for good (a
+staged-only rename is deferred: the destination has no committed baseline yet, so
+`query` serves it meanwhile). The region must still be present at the new path —
+a rename that also deleted the region leaves the note `orphaned`, never welded
+onto the renamed file.
+
 ## For coding agents (Claude Code, Codex, OpenCode, …)
 
 ynotes is built to be driven by an LLM coding agent, not just a human.
@@ -146,6 +155,12 @@ file in a week?* If yes, leave a note. If no, skip.
   | `status: "anchored"` | located and intact | trust the context as-is |
   | `status: "drifted"` | found, but code moved/changed | use it, but re-read the lines; consider `ynotes update <id>` |
   | `status: "orphaned"` | code gone or rewritten | treat the note as historical; surface to the human / re-`save` |
+
+- **`relocated_from` means the file was renamed.** A queried note carrying
+  `relocated_from: "<old path>"` is stored under that pre-rename path and
+  surfaced here because the file was renamed. Use the context normally, then run
+  `ynotes reanchor` to migrate it to the new path for good (after which the
+  field is gone).
 
 - **Exit codes:** `0` = success *even if there are no notes or only orphans*
   (inspect `data.notes[]` — empty is not an error; an orphan-only result is

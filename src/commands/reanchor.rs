@@ -65,6 +65,24 @@ fn run_text(dry_run: bool) -> Result<(), CommandError> {
             )?;
         }
     }
+    let reloc_verb = if report.dry_run {
+        "would relocate"
+    } else {
+        "relocated"
+    };
+    for r in &report.relocated {
+        writeln!(
+            out,
+            "{} {} -> {} {}:{} -> {}:{}",
+            paint(reloc_verb, Colour::Cyan),
+            r.from_target,
+            r.to_target,
+            r.from.start(),
+            r.from.end(),
+            r.to.start(),
+            r.to.end(),
+        )?;
+    }
     for s in &report.skipped {
         writeln!(
             out,
@@ -79,9 +97,11 @@ fn run_text(dry_run: bool) -> Result<(), CommandError> {
         "{}",
         paint(
             &format!(
-                "{} {}, {} skipped, {} already current{}",
+                "{} {}, {} {}, {} skipped, {} already current{}",
                 report.changed.len(),
                 verb,
+                report.relocated.len(),
+                reloc_verb,
                 report.skipped.len(),
                 report.unchanged,
                 if report.dry_run {
@@ -109,6 +129,7 @@ fn run_json(dry_run: bool) -> Result<(), CommandError> {
 struct ReanchorView<'a> {
     dry_run: bool,
     changed: Vec<ChangedView<'a>>,
+    relocated: Vec<RelocatedView<'a>>,
     skipped: Vec<SkippedView<'a>>,
     unchanged: usize,
 }
@@ -116,6 +137,19 @@ struct ReanchorView<'a> {
 #[derive(Serialize)]
 struct ChangedView<'a> {
     target: &'a str,
+    old_id: &'a str,
+    new_id: &'a str,
+    from: [u32; 2],
+    to: [u32; 2],
+}
+
+/// JSON projection of a note moved to a renamed file. Its own partition (not
+/// folded into `changed`) because a relocation changes the note's `target` — a
+/// distinct event a consumer branches on separately.
+#[derive(Serialize)]
+struct RelocatedView<'a> {
+    from_target: &'a str,
+    to_target: &'a str,
     old_id: &'a str,
     new_id: &'a str,
     from: [u32; 2],
@@ -145,6 +179,18 @@ impl<'a> From<&'a ReanchorReport> for ReanchorView<'a> {
                     new_id: &c.new_id,
                     from: [c.from.start(), c.from.end()],
                     to: [c.to.start(), c.to.end()],
+                })
+                .collect(),
+            relocated: r
+                .relocated
+                .iter()
+                .map(|r| RelocatedView {
+                    from_target: &r.from_target,
+                    to_target: &r.to_target,
+                    old_id: &r.old_id,
+                    new_id: &r.new_id,
+                    from: [r.from.start(), r.from.end()],
+                    to: [r.to.start(), r.to.end()],
                 })
                 .collect(),
             skipped: r

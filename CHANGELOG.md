@@ -10,6 +10,24 @@ explicitly here.
 ## [Unreleased]
 
 ### Added
+- **Notes now follow file renames.** `reanchor` migrates a note whose target
+  file was renamed **and committed** to the new path, after a content rung
+  confirms the region is there — reported under a new always-present
+  `relocated[]` array in `reanchor --json` (`{from_target, to_target, old_id,
+  new_id, from, to}`). A rename where the region was *deleted* is not moved: it
+  stays `orphaned` (the wrong-file guard — a note is never welded onto the
+  renamed file at an unrelated line). A rename that is only *staged* is
+  deferred, not migrated: the destination has no committed git baseline yet, so
+  relocating there would strip the note's transport rung and it could never heal
+  again; `query` already surfaces it at the new path meanwhile (below), and
+  `reanchor` migrates it once the rename is committed.
+- `query` self-heals across a rename before any maintenance runs: querying the
+  new path surfaces notes from the path it was renamed from (resolved against the
+  current file), flagged with `relocated_from` (`--json`) — so an agent working
+  at the new path finds the context immediately. This runs even when the new
+  path already has notes of its own, so a fresh note on the destination never
+  hides the pre-rename context (results are de-duplicated by id). Read-only; the
+  migration is made durable by `reanchor`.
 - `ynotes delete <full-id>` can now **purge a corrupt record** — one that
   cannot be read, so `find_by_id_prefix` (and therefore a normal `delete`/
   `update`) could not previously reach it. Removal requires the *exact*
@@ -27,6 +45,55 @@ explicitly here.
   (`{id, target, error}`), surfaced rather than dropped.
 
 ### Fixed
+- **A file rename no longer orphans every note on the file and hides them at
+  the new path** (the R1 rename gap). A note's `target` is its index key and
+  part of its content-hash id, and nothing rewrote it, so a routine `git mv`
+  made the note invisible at the new path and `orphaned` at the old one. It is
+  now followed both ways: `query` surfaces it at the new path immediately (for a
+  staged rename too), and `reanchor` migrates it durably once the rename is
+  committed (both above). A plain unstaged `mv` to an untracked path is still out
+  of scope (git emits no rename signal); stage the move so `query` follows it,
+  and commit it so `reanchor` migrates it.
+- **A deleted region can no longer silently drift onto a same-shaped sibling.**
+  When a region's code is gone (deleted, or its old path reused for unrelated
+  content after a rename), the resolver could weld the note onto a coincidental
+  look-alike elsewhere in the file — which `reanchor` would then make permanent.
+  The cause was that a *moved* fuzzy match's corroboration accepted a witness on
+  range overlap alone, ignoring the witness's own confidence:
+  - git could only transport the saved range onto its deletion point — a
+    low-confidence `touched` hit git itself flags — yet that counted as a full
+    witness. A git witness now requires an *untouched* transport (one that
+    followed surviving lines).
+  - a `structural` hit on a **same-named construct in a different scope**
+    (`Bar::build` when the note was on `Foo::build`) counted at any score. A
+    structural witness now requires an *exact ancestor-chain* match (the same
+    construct in its original scope), not a namesake elsewhere.
+
+  With neither a qualifying git nor structural witness, the note orphans
+  honestly (invariants #4/#10) instead of drifting onto unrelated code. Genuine
+  moves still drift exactly as before: a region whose boundary lines survive has
+  an untouched git transport, and a reformatted-or-moved construct in its own
+  scope keeps an exact-chain structural hit.
+- **A note no longer relocates onto a same-line replacement across a rename.**
+  Rename-following corroborates the region at the new path, but a fuzzy hit at
+  the note's *original* line numbers is not evidence in a *different* file — a
+  renamed file that replaces the region in place with similar-but-unrelated code
+  would otherwise be accepted via the "did not move" shortcut. Relocation now
+  resolves in a dedicated mode that drops that shortcut: a fuzzy-only match at
+  the saved lines needs an independent witness (an untouched git transport or an
+  exact-chain structural hit) or the note stays `orphaned` at its old path,
+  never welded onto the replacement (invariants #4/#10). Same-file resolution is
+  unchanged — an in-place edit still drifts at its own anchor.
+- **Renames of files whose path contains a quote, backslash, or tab are now
+  followed.** Rename detection parsed git's `--name-status` output on tab
+  boundaries, but git C-quotes paths with unusual characters, so those renames
+  were silently missed and their notes orphaned. Detection now uses `-z`
+  (NUL-delimited, unquoted) output, so any valid path is handled.
+- **A corrupt index id can no longer panic a read.** An index entry whose id is
+  not a 64-character content hash (a hand-edited or damaged `by-path.json`) could
+  reach the two-character fan-out split and panic. The index loader now rejects a
+  non-id up front as `IndexMalformed`, surfacing the "run `ynotes reindex`" repair
+  hint instead (invariant #4).
 - A single malformed note file no longer hard-fails `query`/`list` (and, through
   them, `lookup`/`reanchor`/`doctor`). The bad record is skipped from the
   results and surfaced (`malformed[]` / `doctor` `health`), so one corrupt
@@ -54,6 +121,10 @@ explicitly here.
   it from an older commit (still correct, marginally more work).
 
 ### Changed
+- `--json` agent contract bumped to `v: 10` (adds the always-present
+  `relocated[]` array to `reanchor` and the optional `relocated_from` field to
+  the shared resolved-`note` object; no existing field changed; mirrored in
+  `tests/agent_contract.rs` and `ynotes.schema.json`).
 - `--json` agent contract bumped to `v: 9` (adds the always-present
   `deleted_unreadable[]` array to `delete`; no existing field changed; mirrored
   in `tests/agent_contract.rs` and `ynotes.schema.json`).

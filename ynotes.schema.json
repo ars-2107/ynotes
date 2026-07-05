@@ -272,9 +272,9 @@
     "reanchorData": {
       "type": "object",
       "title": "reanchor --json data",
-      "description": "Payload for `ynotes reanchor --json`. Reports every note whose selectors were refreshed (`changed`), every note deliberately left untouched with the reason (`skipped`), and how many were already current (`unchanged`). A re-anchored note gets a new id (the id hashes over the refreshed bundle) — `old_id`/`new_id` carry both for lineage tracking. Under `--dry-run` the same shape is emitted with `dry_run: true` and no writes occur.",
+      "description": "Payload for `ynotes reanchor --json`. Reports every note whose selectors were refreshed in place (`changed`), every note moved to a renamed file (`relocated`), every note deliberately left untouched with the reason (`skipped`), and how many were already current (`unchanged`). Any note that moved gets a new id (the id hashes over target+bundle) — `old_id`/`new_id` carry both for lineage tracking. Under `--dry-run` the same shape is emitted with `dry_run: true` and no writes occur.",
       "additionalProperties": false,
-      "required": ["dry_run", "changed", "skipped", "unchanged"],
+      "required": ["dry_run", "changed", "relocated", "skipped", "unchanged"],
       "properties": {
         "dry_run": {
           "type": "boolean",
@@ -282,7 +282,7 @@
         },
         "changed": {
           "type": "array",
-          "description": "Notes refreshed (or that would be). Each entry's `from` is the prior captured range; `to` is the range the refresher resolved to in the current file.",
+          "description": "Notes refreshed in place (or that would be) — the region moved or was edited within the same file. Each entry's `from` is the prior captured range; `to` is the range the refresher resolved to in the current file. A note that moved to a *different* file is reported under `relocated`, not here.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -293,6 +293,35 @@
               "new_id": { "$ref": "#/$defs/noteId" },
               "from": { "$ref": "#/$defs/lineRange" },
               "to": { "$ref": "#/$defs/lineRange" }
+            }
+          }
+        },
+        "relocated": {
+          "type": "array",
+          "description": "Notes moved to a renamed file (or that would be): git detected the target was renamed and a content rung corroborated the region at the new path. Distinct from `changed` because the note's target path changed (`from_target` -> `to_target`), so the id necessarily rotates. A rename where the region was *deleted* is not relocated — it appears in `skipped` with `reason_code: \"orphaned\"` (the wrong-file guard: a note is never welded onto the renamed file at an unrelated line). Always present; empty array when nothing relocated.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from_target", "to_target", "old_id", "new_id", "from", "to"],
+            "properties": {
+              "from_target": {
+                "$ref": "#/$defs/target",
+                "description": "The path the note was filed under before the rename."
+              },
+              "to_target": {
+                "$ref": "#/$defs/target",
+                "description": "The path it now lives at (the file's current name)."
+              },
+              "old_id": { "$ref": "#/$defs/noteId" },
+              "new_id": { "$ref": "#/$defs/noteId" },
+              "from": {
+                "$ref": "#/$defs/lineRange",
+                "description": "Where the region sat in the old file at save time."
+              },
+              "to": {
+                "$ref": "#/$defs/lineRange",
+                "description": "Where it resolved to in the renamed file."
+              }
             }
           }
         },
@@ -520,6 +549,10 @@
           "$ref": "#/$defs/lineRange",
           "description": "Present only for a drifted or orphaned note: the range it occupied before it moved or was lost."
         },
+        "relocated_from": {
+          "type": "string",
+          "description": "Present only on a `query` note surfaced under a file it was renamed *to*: the pre-rename `target` path the note is still stored under. Its presence means the note migrated here via a followed rename and a `reanchor` would make that durable; omitted for a note resolved against its own target (every `list`/`lookup` note, and any query note that matched directly)."
+        },
         "body": {
           "type": "string",
           "description": "The note's context text."
@@ -594,8 +627,8 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "const": 9,
-      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v9 added an always-present `deleted_unreadable[]` array to `delete` (ids of *corrupt* records purged by exact id — they cannot be read to supply a target/scope/body, so they are listed as bare ids rather than rich `deleted[]` entries; an entry here is a success, not a failure, and does not flip the exit code); no existing payload field changed. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
+      "const": 10,
+      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v10 followed file renames: `reanchor` gained an always-present `relocated[]` array (notes moved to a renamed file, corroborated at the new path), and the shared resolved-`note` object gained an optional `relocated_from` (present only on a `query` note surfaced under a file it was renamed to — the pre-rename path it is still stored under); no existing payload field changed. v9 added an always-present `deleted_unreadable[]` array to `delete` (ids of *corrupt* records purged by exact id — they cannot be read to supply a target/scope/body, so they are listed as bare ids rather than rich `deleted[]` entries; an entry here is a success, not a failure, and does not flip the exit code); no existing payload field changed. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
     },
     "lineRange": {
       "type": "array",

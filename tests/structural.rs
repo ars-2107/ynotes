@@ -351,3 +351,64 @@ fn captured_with_trailing_blank_relocates_after_move() {
         r.end(),
     );
 }
+
+/// A note's construct is deleted while a *same-named* construct in a different
+/// scope survives elsewhere — `Foo::build` is removed, `Bar::build` remains.
+/// Structural can only match same-named candidates, so it lands on `Bar::build`
+/// but at a *relaxed, different-chain* score (0.55: same name, different
+/// enclosing impl and body), and fuzzy latches onto its near-identical body at
+/// the same place. Neither independently confirms `Foo::build` survived — they
+/// converge on a same-named sibling. A relaxed structural hit must therefore
+/// NOT witness fuzzy's move: the note orphans rather than welding onto
+/// `Bar::build` (which `reanchor` would then make permanent). Same class as the
+/// touched-git-witness hole, on the structural side.
+#[test]
+fn a_relaxed_structural_hit_does_not_witness_a_moved_fuzzy_onto_a_same_named_sibling() {
+    let v1 = file(&[
+        "impl Foo {",
+        "    fn build(&self) -> Widget {",
+        "        let mut w = Widget::new();",
+        "        w.tune(self.alpha);",
+        "        w",
+        "    }",
+        "}",
+        "fn spacer_one() {}",
+        "fn spacer_two() {}",
+        "fn spacer_three() {}",
+        "impl Bar {",
+        "    fn build(&self) -> Widget {",
+        "        let mut w = Widget::new();",
+        "        w.tune(self.beta);",
+        "        w",
+        "    }",
+        "}",
+    ]);
+    // Note on Foo::build's whole definition (lines 2:6).
+    let bundle = bundle_for(&v1, LineRange::new(2, 6).unwrap());
+
+    // Delete impl Foo entirely; impl Bar (with its own `build`) shifts up to the
+    // top. `Foo::build` is genuinely gone — the note must not follow onto
+    // `Bar::build`, a different method that merely shares the name.
+    let v2 = file(&[
+        "fn spacer_one() {}",
+        "fn spacer_two() {}",
+        "fn spacer_three() {}",
+        "impl Bar {",
+        "    fn build(&self) -> Widget {",
+        "        let mut w = Widget::new();",
+        "        w.tune(self.beta);",
+        "        w",
+        "    }",
+        "}",
+    ]);
+    let res = resolve(&bundle, &v2, None);
+
+    assert!(
+        matches!(res.status, AnchorStatus::Orphaned { .. }),
+        "Foo::build was deleted; a relaxed same-name structural hit on Bar::build \
+         must not witness fuzzy's move — orphan, not drift: {:?} at {:?}",
+        res.status,
+        res.range,
+    );
+    assert_eq!(res.range, None, "an orphan has no resolved range");
+}

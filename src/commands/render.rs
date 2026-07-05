@@ -40,6 +40,12 @@ pub(crate) struct NoteView {
     pub(crate) resolved_range: RangePair,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) previous_range: Option<[u32; 2]>,
+    /// Present only when this note surfaced under a file it was renamed *to*:
+    /// the pre-rename path it is still stored under. Omitted otherwise, so the
+    /// default note shape is unchanged. Its presence tells an agent the note
+    /// migrated here and a `reanchor` would make that durable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) relocated_from: Option<String>,
     pub(crate) body: String,
     /// Present only with `--explain`; omitted otherwise so the default schema
     /// is unchanged.
@@ -111,6 +117,7 @@ pub(crate) fn note_view(rn: &ResolvedNote, explain: bool) -> NoteView {
         stale,
         resolved_range: rn.resolution.range.map(|r| [r.start(), r.end()]),
         previous_range: previous,
+        relocated_from: rn.relocated_from.clone(),
         body: rn.note.body.clone(),
         rungs: explain.then(|| rn.resolution.rungs.iter().map(rung_view).collect()),
     }
@@ -162,6 +169,19 @@ pub(crate) fn write_text_note(
         range,
         paint(&tag, colour),
     )?;
+    if let Some(from) = &v.relocated_from {
+        // This note is stored under `from` but surfaced here because the
+        // queried file was renamed from it. Name that explicitly, and point at
+        // the verb that makes the migration durable.
+        writeln!(
+            out,
+            "  {}",
+            paint(
+                &format!("relocated from {from} (run `ynotes reanchor` to migrate)"),
+                Colour::Cyan,
+            ),
+        )?;
+    }
     for line in v.body.lines() {
         writeln!(out, "  {line}")?;
     }

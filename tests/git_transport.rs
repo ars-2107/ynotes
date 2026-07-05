@@ -125,6 +125,92 @@ fn a_deleted_region_orphans_even_when_git_collapses_it() {
     assert_eq!(res.range, None, "an orphan has no resolved range");
 }
 
+/// The dangerous complement of [`a_deleted_region_orphans_even_when_git_collapses_it`]:
+/// the noted region is deleted *and* a same-shaped-but-unrelated block sits
+/// where git collapses it, so fuzzy latches onto that sibling. Git can only
+/// transport the deleted range onto the change point with `touched: true` — the
+/// low-confidence (score 70) "carried a deleted range onto its deletion point"
+/// case its own comment says the resolver should distrust. That hit must NOT
+/// corroborate fuzzy's moved match: with no *independent* witness the note has
+/// to orphan, not silently weld onto the unrelated block. Regression test for
+/// the touched-git-witness hole (a deleted region drifting onto a coincidental
+/// same-shaped sibling, which `reanchor` would then make permanent).
+#[test]
+fn a_touched_git_transport_does_not_witness_a_moved_fuzzy_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    if !git(root, &["init", "-q"]) {
+        eprintln!("skipping: no usable `git` binary");
+        return;
+    }
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    // `.txt` so tree-sitter does not parse it ⇒ the structural rung is Skipped,
+    // isolating the git-witness branch (fuzzy + git are the only live rungs).
+    let file = root.join("acl.txt");
+    std::fs::write(
+        &file,
+        "filler line one aaaa\n\
+         filler line two bbbb\n\
+         filler line three cccc\n\
+         grant admin access to the primary vault\n\
+         deny  admin access to the primary vault\n\
+         audit admin access to the primary vault\n\
+         filler line seven dddd\n",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    if !git(root, &["commit", "-q", "-m", "initial"]) {
+        eprintln!("skipping: git commit unavailable in this environment");
+        return;
+    }
+
+    let ctx = GitContext::discover(root).expect("repo discovered");
+    // Note covers the admin-ACL region at lines 4:6.
+    let committed = SourceFile::read(&file).unwrap();
+    let bundle = SelectorBundle::capture_full(&committed, LineRange::new(4, 6).unwrap()).unwrap();
+    assert!(bundle.git.is_some(), "tracked file gets a git selector");
+    assert!(
+        bundle.structural.is_none(),
+        "unparsed `.txt` gets no structural selector",
+    );
+
+    // Replace the whole file: the admin-ACL region is gone, and a same-shaped
+    // but different block (guest/backup, not admin/primary) now sits at 1:3,
+    // with unrelated filler below. Commit, so git has a real replacement hunk.
+    std::fs::write(
+        &file,
+        "grant guest access to the backup vault\n\
+         deny  guest access to the backup vault\n\
+         audit guest access to the backup vault\n\
+         totally unrelated filler eeee\n\
+         totally unrelated filler ffff\n\
+         totally unrelated filler gggg\n",
+    )
+    .unwrap();
+    git(root, &["add", "acl.txt"]);
+    git(root, &["commit", "-q", "-m", "replace acl block"]);
+
+    let after = SourceFile::read(&file).unwrap();
+    let res = resolve(&bundle, &after, Some(&ctx));
+
+    // quote misses (tokens changed); structural is Skipped; fuzzy hits the
+    // guest block at 1:3 — moved from the saved 4:6 — and git can only
+    // transport 4:6 onto the change point with `touched: true` (score 70). That
+    // low-confidence hit is not evidence the region survived, so it must not
+    // witness fuzzy's move: the note orphans rather than welding onto guest/backup.
+    assert!(
+        matches!(res.status, AnchorStatus::Orphaned { .. }),
+        "a deleted region with only a touched-git witness must orphan, not \
+         drift onto a same-shaped sibling: {:?} at {:?}",
+        res.status,
+        res.range,
+    );
+    assert_eq!(res.range, None, "an orphan has no resolved range");
+}
+
 /// An untracked file — one never `git add`-ed, absent from HEAD — gets no git
 /// selector. Its git baseline is empty (`git diff HEAD -- <path>` shows
 /// nothing), so R1 would report a spurious result; `capture_full` must instead

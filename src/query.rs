@@ -12,7 +12,7 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use crate::anchor::{AnchorStatus, Resolution, resolve};
+use crate::anchor::{AnchorStatus, Resolution, resolve, resolve_for_relocation};
 use crate::error::{Error, Result};
 use crate::git::GitContext;
 use crate::note::{Note, Scope};
@@ -87,6 +87,13 @@ pub struct ResolvedNote {
     pub note: Note,
     /// Its resolution against the current file.
     pub resolution: Resolution,
+    /// Set only when this note surfaced under a *different* file than its stored
+    /// `target` because [`query`] detected the queried file was renamed from it
+    /// — the pre-rename path the note is still filed under. `None` for a note
+    /// resolved against its own target (every `list`/`lookup` note, and any
+    /// query note that matched directly). Its presence tells an agent the note
+    /// migrated here and a `reanchor` would make that durable.
+    pub relocated_from: Option<String>,
 }
 
 /// The result of a query: notes that matched the interval, and the orphans
@@ -148,18 +155,47 @@ pub fn query(store: &Store, file: &Path, at: LineSpec) -> Result<QueryResult> {
     let mut matched = Vec::new();
     let mut orphaned = Vec::new();
 
+    let mut returned_ids = std::collections::BTreeSet::new();
+
     for note in notes {
         let resolution = resolve(&note.bundle, &source, git.as_ref());
-        let resolved = ResolvedNote { note, resolution };
+        let resolved = ResolvedNote {
+            note,
+            resolution,
+            relocated_from: None,
+        };
 
         match resolved.resolution.status {
-            AnchorStatus::Orphaned { .. } => orphaned.push(resolved),
+            AnchorStatus::Orphaned { .. } => {
+                returned_ids.insert(resolved.note.id.clone());
+                orphaned.push(resolved);
+            }
             _ => {
                 if includes(&resolved, interval) {
+                    returned_ids.insert(resolved.note.id.clone());
                     matched.push(resolved);
                 }
             }
         }
+    }
+
+    // Read-side self-heal: a file may have been renamed from a path that still
+    // has notes. Reverse-detect that rename and surface those notes here,
+    // resolved against the current file, so an agent working at the new path
+    // finds them before any `reanchor` has migrated them. This must run even
+    // when the new path already has notes of its own; otherwise a fresh note on
+    // the destination hides all pre-rename context until maintenance runs.
+    // Read-only (invariant #8).
+    if let Some(ctx) = git.as_ref() {
+        reverse_detect(
+            store,
+            ctx,
+            file,
+            &source,
+            interval,
+            &mut matched,
+            &mut returned_ids,
+        )?;
     }
 
     matched.sort_by(|a, b| {
@@ -236,7 +272,11 @@ pub fn list(store: &Store, only: Option<&Path>) -> Result<ListResult> {
         }
         let source = &cache[&note.target];
         let resolution = resolve(&note.bundle, source, git.as_ref());
-        out.push(ResolvedNote { note, resolution });
+        out.push(ResolvedNote {
+            note,
+            resolution,
+            relocated_from: None,
+        });
     }
 
     out.sort_by(|a, b| {
@@ -284,6 +324,73 @@ pub fn lookup(
         result.notes.retain(|rn| rn.note.body.contains(needle));
     }
     Ok(result)
+}
+
+/// Surface notes stored under a file's *pre-rename* path: the read-side half
+/// of following a rename.
+///
+/// Asks git which earlier paths the current file was renamed from, loads the
+/// notes filed under each, resolves them against the current file, and pushes
+/// the **located** ones (interval-filtered) into `matched`, tagged with the
+/// pre-rename `target` in [`ResolvedNote::relocated_from`]. A reverse-detected
+/// note that orphans against the current file is *not* surfaced — an orphan
+/// does not belong to a file it cannot resolve in; its home stays the old path,
+/// where a direct query still finds it.
+///
+/// Strictly read-only, so a query never writes (invariant #8). The migration is
+/// made durable by `reanchor`, not here.
+///
+/// # Errors
+///
+/// [`Error::IndexMalformed`]/[`Error::IndexMissing`]/[`Error::Io`] if the index
+/// or a note record for a pre-rename path cannot be read.
+fn reverse_detect(
+    store: &Store,
+    ctx: &GitContext,
+    file: &Path,
+    source: &SourceFile,
+    interval: Option<LineRange>,
+    matched: &mut Vec<ResolvedNote>,
+    returned_ids: &mut std::collections::BTreeSet<String>,
+) -> Result<()> {
+    let Some(git_rel) = ctx.relativize(file) else {
+        return Ok(());
+    };
+    for old_git_rel in ctx.renamed_from(&git_rel) {
+        // git reports paths relative to the git root; translate back to a store
+        // target via the absolute path. A pre-rename path outside the store
+        // (`OutsideStore`) simply has no notes here — skip it.
+        let old_abs = ctx.root().join(&old_git_rel);
+        let Ok(old_target) = store.relativize(&old_abs) else {
+            continue;
+        };
+        for note in store.notes_for(&old_target)?.notes {
+            // Corroborate in relocation mode (`resolve_for_relocation`): content
+            // rungs only (the note's git selector names the renamed-away old
+            // path, so the git rung would transport onto the deletion point and
+            // false-witness a moved fuzzy match, surfacing the note against
+            // unrelated code), and with the "did not move" shortcut dropped (a
+            // fuzzy hit at the saved line numbers is meaningless in this
+            // different file). Invariant #10; mirrors `reanchor`'s relocation
+            // corroboration exactly.
+            let resolution = resolve_for_relocation(&note.bundle, source);
+            if matches!(resolution.status, AnchorStatus::Orphaned { .. }) {
+                continue;
+            }
+            let resolved = ResolvedNote {
+                note,
+                resolution,
+                relocated_from: Some(old_target.clone()),
+            };
+            if includes(&resolved, interval) {
+                if !returned_ids.insert(resolved.note.id.clone()) {
+                    continue;
+                }
+                matched.push(resolved);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether a resolved (non-orphan) note satisfies the query interval under

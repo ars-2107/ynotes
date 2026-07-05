@@ -51,7 +51,9 @@ pub use error::{Error, Result};
 pub use git::{GitContext, git_version};
 pub use note::{Note, Scope};
 pub use query::{LineSpec, ListResult, QueryResult, ResolvedNote, list, lookup, query};
-pub use reanchor::{ReanchorChange, ReanchorReport, ReanchorSkip, ReanchorSkipReason, reanchor};
+pub use reanchor::{
+    ReanchorChange, ReanchorRelocation, ReanchorReport, ReanchorSkip, ReanchorSkipReason, reanchor,
+};
 pub use selector::{GitSelector, SCHEMA, SelectorBundle};
 pub use source::{LineRange, SourceFile};
 pub use store::{IndexHealth, MalformedNote, NoteScan, ReindexReport, Store, StoreHealth};

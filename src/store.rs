@@ -1020,8 +1020,7 @@ impl Store {
         let rest = path.file_stem()?.to_str()?;
         let prefix = path.parent()?.file_name()?.to_str()?;
         let id = format!("{prefix}{rest}");
-        let is_id = id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-        is_id.then_some(id)
+        is_note_id(&id).then_some(id)
     }
 
     fn read_note(&self, id: &str) -> Result<Note> {
@@ -1097,6 +1096,7 @@ impl Store {
         // `BTreeMap<String, Vec<String>>` (its values are strings, not arrays),
         // so detection is unambiguous.
         if let Ok(map) = serde_json::from_slice::<IndexMap>(bytes) {
+            validate_index_ids(&map, path)?;
             return Ok(map);
         }
         let text = std::str::from_utf8(bytes).map_err(|_| Error::IndexMalformed {
@@ -1112,6 +1112,11 @@ impl Store {
                 serde_json::from_str(line).map_err(|_| Error::IndexMalformed {
                     path: path.to_path_buf(),
                 })?;
+            if !is_note_id(&entry.id) {
+                return Err(Error::IndexMalformed {
+                    path: path.to_path_buf(),
+                });
+            }
             map.entry(entry.target).or_default().push(entry.id);
         }
         Ok(map)
@@ -1184,6 +1189,28 @@ impl Store {
         let _unlocked = FileExt::unlock(&file);
         result
     }
+}
+
+/// Rejects an index whose entries point at a value that is not a note id as
+/// [`Error::IndexMalformed`], so a hand-edited or damaged `by-path.json` surfaces
+/// the reindex-repair path instead of carrying a malformed id into the
+/// two-character fan-out that derives a record's path (invariant #4).
+fn validate_index_ids(index: &IndexMap, path: &Path) -> Result<()> {
+    if index.values().flatten().all(|id| is_note_id(id.as_str())) {
+        Ok(())
+    } else {
+        Err(Error::IndexMalformed {
+            path: path.to_path_buf(),
+        })
+    }
+}
+
+/// Whether `id` is a well-formed note id: a 64-character lowercase-hex SHA-256
+/// digest. A note id is a content hash (invariant #6), so anything shorter or
+/// non-hex is corruption — and feeding it to the two-character fan-out would
+/// slice a too-short string.
+fn is_note_id(id: &str) -> bool {
+    id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Creates `dir` and all parents, mapping failure to a path-carrying

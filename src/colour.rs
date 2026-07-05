@@ -18,6 +18,8 @@ pub(crate) enum Colour {
     Yellow,
     /// Orphaned — lost.
     Red,
+    /// An actionable advisory — e.g. a note surfaced via a followed rename.
+    Cyan,
     /// De-emphasised detail (confidence, rung lines).
     Dim,
 }
@@ -29,6 +31,7 @@ impl Colour {
             Colour::Green => "32",
             Colour::Yellow => "33",
             Colour::Red => "31",
+            Colour::Cyan => "36",
             Colour::Dim => "2",
         }
     }

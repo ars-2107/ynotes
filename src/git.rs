@@ -53,6 +53,17 @@ impl GitContext {
         root.is_dir().then_some(Self { root })
     }
 
+    /// The work-tree root of the discovered repository.
+    ///
+    /// Rename detection reports paths relative to *this* root, which is not
+    /// necessarily the ynotes store root (a `.ynotes` may sit in a
+    /// subdirectory of the repo). A caller translating a git-relative path back
+    /// to a store target needs this base to rebuild the absolute path.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// The current `HEAD` commit id, or `None` if it cannot be read (e.g. an
     /// empty repository with no commits yet).
     #[must_use]
@@ -161,6 +172,145 @@ impl GitContext {
             Transport::Unknown => range,
         }
     }
+
+    /// Where the file tracked at `rel_path` in `from_commit` now lives in the
+    /// work tree, if git detects it was renamed since — `None` when it was not
+    /// renamed (still present, or genuinely gone).
+    ///
+    /// Compares `from_commit`'s tree against the work tree with rename
+    /// detection, so it catches both a **committed** and a **staged** rename in
+    /// one call. The diff is filtered to renames and left unscoped: a pathspec
+    /// on the *old* path suppresses git's rename pairing (the new path is then
+    /// excluded from the diff), so the whole rename set is fetched and matched
+    /// on the old side here.
+    ///
+    /// A plain unstaged `mv` to an *untracked* path is invisible to
+    /// `git diff` (the new file is untracked) and correctly yields `None`.
+    /// Best-effort: any git failure yields `None`, so a missing tool never
+    /// turns into an error.
+    #[must_use]
+    pub fn renamed_to(&self, from_commit: &str, rel_path: &str) -> Option<String> {
+        let out = run(
+            &self.root,
+            &[
+                "diff",
+                RENAME_FIND,
+                "--name-status",
+                "-z",
+                "--diff-filter=R",
+                from_commit,
+            ],
+        )?;
+        parse_renames_z(&out)
+            .into_iter()
+            .find(|(old, _)| old == rel_path)
+            .map(|(_, new)| new)
+    }
+
+    /// Every earlier path the work-tree file `rel_path` was renamed from, most
+    /// recent first and de-duplicated — the reverse of
+    /// [`renamed_to`](Self::renamed_to).
+    ///
+    /// Two sources are unioned so the reverse view is as complete as the
+    /// forward one:
+    ///
+    /// - the **uncommitted** diff (`HEAD` against the work tree), so a
+    ///   staged-but-not-yet-committed `git mv` is seen — git *history* cannot
+    ///   show it because it is not in a commit yet;
+    /// - the **committed history** via `git log --follow`, git's own
+    ///   rename-following machinery, so a multi-hop chain (`a` → `b` →
+    ///   `rel_path`) yields every prior name.
+    ///
+    /// Empty when the file has no rename history, is untracked, or git is
+    /// unavailable — never an error.
+    #[must_use]
+    pub fn renamed_from(&self, rel_path: &str) -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut names = Vec::new();
+
+        // Uncommitted (staged or working-tree) rename into `rel_path`. Matched
+        // on the *new* side, since we are asking where this current path came
+        // from.
+        if let Some(out) = run(
+            &self.root,
+            &[
+                "diff",
+                RENAME_FIND,
+                "--name-status",
+                "-z",
+                "--diff-filter=R",
+                "HEAD",
+            ],
+        ) {
+            for (old, new) in parse_renames_z(&out) {
+                if new == rel_path && seen.insert(old.clone()) {
+                    names.push(old);
+                }
+            }
+        }
+
+        // Committed history. `--follow` scopes to this single path and yields
+        // the old side of every rename step in its chain.
+        if let Some(out) = run(
+            &self.root,
+            &[
+                "log",
+                "--follow",
+                RENAME_FIND,
+                "--name-status",
+                "-z",
+                "--diff-filter=R",
+                "--format=",
+                "--",
+                rel_path,
+            ],
+        ) {
+            for (old, _new) in parse_renames_z(&out) {
+                if seen.insert(old.clone()) {
+                    names.push(old);
+                }
+            }
+        }
+        names
+    }
+}
+
+/// git's rename-similarity threshold, passed as `-M<n>%`. Lowered from git's
+/// 50% default because a small file renamed *and* edited in one step can score
+/// well under 50% (a few changed characters weigh heavily in a short blob), and
+/// missing that rename would orphan the note. A generous threshold is safe here
+/// precisely because git's signal is never trusted alone: every proposed rename
+/// is corroborated by the content ladder at the new path (invariant #10), so a
+/// spurious pairing resolves to no region and is declined rather than acted on.
+const RENAME_FIND: &str = "-M40%";
+
+/// Parses `-z --name-status` output, returning `(old, new)` rename pairs.
+///
+/// Git's non-`-z` porcelain C-quotes paths containing characters like quotes,
+/// tabs, newlines, or backslashes. `-z` leaves path bytes unquoted and
+/// separates fields with NUL, which gives this parser an unambiguous boundary.
+/// Non-rename records are ignored; only a rename moves a note.
+fn parse_renames_z(name_status: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut fields = name_status.split('\0').filter(|field| !field.is_empty());
+    while let Some(status) = fields.next() {
+        if status.starts_with('R') {
+            let (Some(old), Some(new)) = (fields.next(), fields.next()) else {
+                break;
+            };
+            out.push((old.to_owned(), new.to_owned()));
+            continue;
+        }
+        // Defensive for callers that ever relax `--diff-filter=R`: copies also
+        // carry two path fields, while ordinary records carry one.
+        if status.starts_with('C') {
+            let _ = fields.next();
+            let _ = fields.next();
+        } else {
+            let _ = fields.next();
+        }
+    }
+    out
 }
 
 /// The version of the `git` executable on `PATH` (the `2.43.0` in

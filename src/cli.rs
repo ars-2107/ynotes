@@ -65,6 +65,13 @@ pub(crate) enum Command {
     /// note for the file. Orphaned notes are always included. A record that
     /// cannot be read is surfaced (`--json` `malformed[]`), never a hard
     /// failure that hides the rest.
+    ///
+    /// If git shows the file was renamed from a path that has notes, those notes
+    /// are surfaced here too — resolved against the current file and flagged
+    /// `relocated_from` (`--json`) so an agent working at the new path finds the
+    /// context without first running `reanchor`. This runs even when the file
+    /// already has notes of its own (results are de-duplicated by id), so a
+    /// fresh note on the renamed path never hides the pre-rename context.
     Query {
         /// The file to query.
         file: PathBuf,
@@ -119,6 +126,17 @@ pub(crate) enum Command {
     /// A read never writes; this is the deliberate, auditable pass that
     /// persists re-anchors. Low-confidence and orphaned notes are left
     /// untouched.
+    ///
+    /// This is also where a note durably follows a file rename: when a target
+    /// file is gone but git shows it was renamed *and committed*, and a content
+    /// rung confirms the region at the new path, the note is moved there and
+    /// reported under `relocated[]` (`--json`). A rename where the region was
+    /// deleted is not moved — it is left `orphaned` for a human, never welded
+    /// onto the renamed file. A rename that is only *staged* is deferred, not
+    /// migrated: the destination has no committed baseline yet, so relocating
+    /// there would strip the note's git rung; `query` already surfaces the note
+    /// at the new path meanwhile, and this pass migrates it once the rename is
+    /// committed.
     ///
     /// Note: a re-anchored note gets a *new* id (the id is a content hash
     /// over `(target, scope, bundle, body)`, and the bundle just changed).

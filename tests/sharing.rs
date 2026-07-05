@@ -108,6 +108,45 @@ fn a_malformed_index_errors_with_a_reindex_hint() {
     );
 }
 
+/// A parseable index that points at a malformed id (not a 64-hex content hash)
+/// must also fail loudly with the reindex hint, not carry the bad id into the
+/// note-path fan-out. The complement of
+/// `a_malformed_index_errors_with_a_reindex_hint`, which covers an index that
+/// does not parse at all.
+#[test]
+fn an_index_entry_with_a_malformed_id_errors_with_a_reindex_hint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    ynotes().current_dir(p).arg("init").assert().success();
+    std::fs::write(p.join("code.rs"), "fn a() {}\n").unwrap();
+    // This is parseable JSONL but not a valid content-addressed note pointer.
+    // It must be rejected as index corruption before it reaches note_path's
+    // two-character fan-out split.
+    std::fs::write(
+        p.join(".ynotes/index/by-path.json"),
+        "{\"target\":\"code.rs\",\"id\":\"a\"}\n",
+    )
+    .unwrap();
+
+    let out = ynotes()
+        .current_dir(p)
+        .args(["query", "code.rs", "--json"])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(json["success"], serde_json::json!(false));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("run `ynotes reindex`"),
+        "bad index id should surface the cache repair path: {json}"
+    );
+}
+
 /// A freshly initialised store carries the git-integration files so a
 /// committed `.ynotes/` "just works" on merge with zero per-clone setup.
 #[test]
