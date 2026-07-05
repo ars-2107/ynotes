@@ -68,7 +68,10 @@ cargo run --bin ynotes -- save src/lib.rs 40:78 -m "why this matters"
 cargo run --bin ynotes -- query src/lib.rs 50        # context overlapping line 50
 cargo run --bin ynotes -- query src/lib.rs --json    # machine-readable
 cargo run --bin ynotes -- query src/lib.rs 50 --explain  # show every rung
+cargo run --bin ynotes -- query src/lib.rs 50 --count # just a status breakdown, no bodies
 cargo run --bin ynotes -- list                       # all notes + status
+cargo run --bin ynotes -- list --count               # store-wide status breakdown
+cargo run --bin ynotes -- show abc1234               # one note by id / hex prefix
 cargo run --bin ynotes -- reanchor --dry-run         # preview a refresh
 cargo run --bin ynotes -- reanchor                   # apply re-anchors
 cargo run --bin ynotes -- reanchor --json            # machine-readable refresh report
@@ -184,6 +187,19 @@ file in a week?* If yes, leave a note. If no, skip.
   every resolved note in a single array, with `status` discriminating. Group by
   `status == "orphaned"` if you want the historical matched-vs-orphaned split;
   orphans are still always returned (the never-drop promise).
+- **Check cheaply before pulling bodies.** `query --count` and `list --count`
+  (since `v=11`) return a status breakdown — `{total, anchored, drifted,
+  orphaned}` — instead of the note bodies, so an agent can ask "is there context
+  here, and is any of it stale?" for a few tokens before deciding to pull the
+  full thing. The full rename-aware resolution still runs; only the output is
+  condensed. A non-zero `malformed` count still flags a corrupt record.
+- **Read one note by id with `show`.** `ynotes show <id>` (full id or
+  unambiguous hex prefix) resolves a single note against current code — the
+  by-id read between `query` (by file/line) and `list` (the whole store). Add
+  `--explain` for the per-rung vector, `--json` for the `{note, warnings}`
+  payload. It resolves against the note's stored `target`, so a note whose file
+  was renamed away reads `orphaned`; `query` the new path for the rename-aware
+  view. `--explain` also works on `list` now, not just `query`.
 - **A corrupt record never sinks a read.** Since `v=8`, `query --json` and
   `list --json` carry an always-present `malformed[]`: a note file the index
   points at that cannot be read or parsed is skipped from `notes` but surfaced

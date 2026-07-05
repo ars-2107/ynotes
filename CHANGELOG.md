@@ -10,6 +10,22 @@ explicitly here.
 ## [Unreleased]
 
 ### Added
+- **`ynotes show <id>`**: view a single note by full id or unambiguous hex
+  prefix (>= 4 chars), resolved against current code — the by-id read that sat
+  between `query` (by file/line) and `list` (the whole store). Shows the body
+  and current anchor status; `--explain` adds the per-rung agreement vector,
+  `--json` emits the `showData` payload (`{note, warnings}`). Resolves against
+  the note's stored `target`, so a note whose file was renamed away reads
+  `orphaned` here — `query` on the new path is the rename-aware read.
+- **`--count` summary mode on `query` and `list`**: emit a status breakdown
+  (`{total, anchored, drifted, orphaned}`) instead of the note bodies, so an
+  agent can cheaply check whether there is context here before pulling it. The
+  full, rename-aware resolution still runs; only the output is condensed.
+  `--json` emits `queryCountData` / `listCountData` (with a `malformed` *count*
+  in place of the array). Conflicts with `--explain`.
+- **`--explain` on `list`** (previously `query`-only): populates the optional
+  `rungs` field per note. No contract shape change — `rungs` was already an
+  optional field on the shared note object.
 - **Notes now follow file renames.** `reanchor` migrates a note whose target
   file was renamed **and committed** to the new path, after a content rung
   confirms the region is there — reported under a new always-present

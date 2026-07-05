@@ -12,7 +12,7 @@ use std::path::Path;
 use serde::Serialize;
 use ynotes::{GitContext, SelectorBundle, SourceFile, Store, resolve};
 
-use super::id::validate_prefix;
+use super::id::{resolve_unique, validate_prefix};
 use super::json_envelope;
 use super::render::{scope_word_json, short_id};
 use super::safety::reject_if_escapes_workdir;
@@ -120,30 +120,6 @@ fn run_inner(id: &str, message: Option<&str>, json: bool) -> Result<(), CommandE
         }
     }
     Ok(())
-}
-
-/// Resolve `id` (or hex prefix) to exactly one note. Multiple matches and no
-/// match are both surfaced as user-input failures (exit `2`) — the user gave
-/// us a selector that did not pick out a single note, which is a call-site
-/// mistake to fix.
-fn resolve_unique(store: &Store, id: &str) -> Result<ynotes::Note, CommandError> {
-    let matches = store.find_by_id_prefix(id)?;
-    match matches.len() {
-        0 => Err(CommandError::Usage(format!(
-            "no note matches `{id}` (use `yn list` to see available ids)"
-        ))),
-        1 => Ok(matches.into_iter().next().expect("len == 1")),
-        n => {
-            let candidates: Vec<String> = matches
-                .iter()
-                .map(|m| m.id.chars().take(16).collect::<String>())
-                .collect();
-            Err(CommandError::Usage(format!(
-                "`{id}` is ambiguous — {n} candidates: {}",
-                candidates.join(", ")
-            )))
-        }
-    }
 }
 
 fn read_stdin() -> Result<String, CommandError> {

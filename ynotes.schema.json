@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ars-2107/ynotes/main/ynotes.schema.json",
   "title": "ynotes --json output",
-  "description": "The machine-facing contract for every `ynotes <cmd> --json` output (`save`, `query`, `list`, `update`, `delete`, `prune`, `reanchor`, `reindex`, `doctor`, `lookup`). Every shape rides inside the same envelope: `{success: bool, v: int, …}` — `data` on success, `error`+`type` on failure. The envelope is emitted on stdout regardless of exit code, so a JSON consumer never has to branch on `$?` to parse the response. This is a stable, versioned agent contract: `v` is bumped whenever a field changes and mirrored in tests/agent_contract.rs. See AGENTS.md invariant 7.",
+  "description": "The machine-facing contract for every `ynotes <cmd> --json` output (`save`, `query`, `list`, `show`, `update`, `delete`, `prune`, `reanchor`, `reindex`, `doctor`, `lookup`). `query --count` and `list --count` emit a condensed status-breakdown payload instead of the notes (see queryCountData / listCountData). Every shape rides inside the same envelope: `{success: bool, v: int, …}` — `data` on success, `error`+`type` on failure. The envelope is emitted on stdout regardless of exit code, so a JSON consumer never has to branch on `$?` to parse the response. This is a stable, versioned agent contract: `v` is bumped whenever a field changes and mirrored in tests/agent_contract.rs. See AGENTS.md invariant 7.",
   "oneOf": [
     { "$ref": "#/$defs/successEnvelope" },
     { "$ref": "#/$defs/failureEnvelope" }
@@ -21,7 +21,10 @@
           "oneOf": [
             { "$ref": "#/$defs/saveData" },
             { "$ref": "#/$defs/queryData" },
+            { "$ref": "#/$defs/queryCountData" },
             { "$ref": "#/$defs/listData" },
+            { "$ref": "#/$defs/listCountData" },
+            { "$ref": "#/$defs/showData" },
             { "$ref": "#/$defs/updateData" },
             { "$ref": "#/$defs/deleteData" },
             { "$ref": "#/$defs/pruneData" },
@@ -80,21 +83,7 @@
       "additionalProperties": false,
       "required": ["query", "notes", "malformed", "warnings"],
       "properties": {
-        "query": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["file", "at"],
-          "properties": {
-            "file": {
-              "type": "string",
-              "description": "The file argument as passed on the command line."
-            },
-            "at": {
-              "type": "string",
-              "description": "The location argument: `LINE`, `START:END`, or empty for a whole-file query."
-            }
-          }
-        },
+        "query": { "$ref": "#/$defs/querySpec" },
         "notes": {
           "type": "array",
           "description": "Every note this query returns — anchored or drifted matches of the queried interval, plus every orphaned note for the file (always included). Ordered: matches first (anchored/drifted), then orphans. Group by `status` if you want the historical matched-vs-orphaned split.",
@@ -511,6 +500,104 @@
         }
       }
     },
+    "querySpec": {
+      "type": "object",
+      "title": "query request echo",
+      "description": "The request `query --json` echoes back: the file and location arguments exactly as passed. Shared by the full and `--count` query payloads.",
+      "additionalProperties": false,
+      "required": ["file", "at"],
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "The file argument as passed on the command line."
+        },
+        "at": {
+          "type": "string",
+          "description": "The location argument: `LINE`, `START:END`, or empty for a whole-file query."
+        }
+      }
+    },
+    "countBreakdown": {
+      "type": "object",
+      "title": "status breakdown",
+      "description": "A tally of resolved notes by anchor status, emitted by `--count` summary mode in place of the note bodies. `total` equals `anchored + drifted + orphaned`.",
+      "additionalProperties": false,
+      "required": ["total", "anchored", "drifted", "orphaned"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "anchored": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Notes located and intact."
+        },
+        "drifted": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Notes located but moved or edited."
+        },
+        "orphaned": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Notes no content rung could locate."
+        }
+      }
+    },
+    "queryCountData": {
+      "type": "object",
+      "title": "query --count --json data",
+      "description": "Payload for `ynotes query --count --json`: the status breakdown for a query in place of the note bodies, so an agent can cheaply check whether there is context here before pulling it. The resolution is identical to the full `query` (rename-following included) — only the output is condensed. Distinguished from `queryData` by carrying `count` (not `notes`); `malformed` here is a count, not an array.",
+      "additionalProperties": false,
+      "required": ["query", "count", "malformed", "warnings"],
+      "properties": {
+        "query": { "$ref": "#/$defs/querySpec" },
+        "count": { "$ref": "#/$defs/countBreakdown" },
+        "malformed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many records the index pointed at for this file could not be read or parsed — the count-mode analogue of `queryData.malformed[]`, so a corrupt record is still flagged in summary mode (invariant #4). Pull the full `query --json` to get their ids."
+        },
+        "warnings": {
+          "type": "array",
+          "description": "Non-fatal advisories, as in the full `query` payload. Always present; empty when there is nothing to flag.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "listCountData": {
+      "type": "object",
+      "title": "list --count --json data",
+      "description": "Payload for `ynotes list --count --json`: the status breakdown across the listed set in place of the notes. Distinguished from `listData` by carrying `count` (not `notes`); `malformed` here is a count, not an array.",
+      "additionalProperties": false,
+      "required": ["count", "malformed", "warnings"],
+      "properties": {
+        "count": { "$ref": "#/$defs/countBreakdown" },
+        "malformed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many records the index pointed at could not be read or parsed — the count-mode analogue of `listData.malformed[]` (invariant #4)."
+        },
+        "warnings": {
+          "type": "array",
+          "description": "Non-fatal advisories — populated when a path filter matched nothing. Always present; empty when there is nothing to flag.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "showData": {
+      "type": "object",
+      "title": "show --json data",
+      "description": "Payload for `ynotes show --json`: a single note selected by id (or unambiguous hex prefix), resolved against its stored target. The by-id read — `query` selects by file/line and `list` walks the store; this returns exactly one note. Resolves against the note's own `target`, so a note whose file was renamed away reads `orphaned` here; `query` on the new path is the rename-aware read.",
+      "additionalProperties": false,
+      "required": ["note", "warnings"],
+      "properties": {
+        "note": { "$ref": "#/$defs/note" },
+        "warnings": {
+          "type": "array",
+          "description": "Non-fatal advisories — populated, for example, when the note's target file does not exist on disk (the note then resolves `orphaned`). Always present; empty when there is nothing to flag.",
+          "items": { "type": "string" }
+        }
+      }
+    },
     "note": {
       "type": "object",
       "title": "Resolved note",
@@ -627,8 +714,8 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "const": 10,
-      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v10 followed file renames: `reanchor` gained an always-present `relocated[]` array (notes moved to a renamed file, corroborated at the new path), and the shared resolved-`note` object gained an optional `relocated_from` (present only on a `query` note surfaced under a file it was renamed to — the pre-rename path it is still stored under); no existing payload field changed. v9 added an always-present `deleted_unreadable[]` array to `delete` (ids of *corrupt* records purged by exact id — they cannot be read to supply a target/scope/body, so they are listed as bare ids rather than rich `deleted[]` entries; an entry here is a success, not a failure, and does not flip the exit code); no existing payload field changed. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
+      "const": 11,
+      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v11 added two read surfaces: the `show` subcommand (`showData` — one note by id/prefix, resolved against its stored target) and a `--count` summary mode on `query` and `list` (`queryCountData` / `listCountData` — a status breakdown in place of the note bodies, so an agent can cheaply check for context before pulling it). Both are additive; `list --explain` also gained the optional `rungs` field that `query --explain` already emitted, with no shape change. v10 followed file renames: `reanchor` gained an always-present `relocated[]` array (notes moved to a renamed file, corroborated at the new path), and the shared resolved-`note` object gained an optional `relocated_from` (present only on a `query` note surfaced under a file it was renamed to — the pre-rename path it is still stored under); no existing payload field changed. v9 added an always-present `deleted_unreadable[]` array to `delete` (ids of *corrupt* records purged by exact id — they cannot be read to supply a target/scope/body, so they are listed as bare ids rather than rich `deleted[]` entries; an entry here is a success, not a failure, and does not flip the exit code); no existing payload field changed. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
     },
     "lineRange": {
       "type": "array",

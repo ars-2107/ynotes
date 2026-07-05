@@ -87,6 +87,14 @@ pub(crate) enum Command {
         /// Also show each rung's outcome (the agreement vector).
         #[arg(long)]
         explain: bool,
+
+        /// Summarise instead of printing bodies: a status breakdown (how many
+        /// anchored / drifted / orphaned) so an agent can cheaply check
+        /// whether there is context here before pulling it. The full,
+        /// rename-aware resolution still runs; only the output is condensed.
+        /// Conflicts with `--explain` (there are no per-rung details to show).
+        #[arg(long, conflicts_with = "explain")]
+        count: bool,
     },
 
     /// List every note in the store, with its current anchor status. A record
@@ -98,6 +106,42 @@ pub(crate) enum Command {
         /// Emit machine-readable JSON instead of the text format.
         #[arg(long)]
         json: bool,
+
+        /// Also show each rung's outcome (the agreement vector) per note.
+        #[arg(long)]
+        explain: bool,
+
+        /// Summarise instead of listing notes: a status breakdown across the
+        /// listed set. Conflicts with `--explain`.
+        #[arg(long, conflicts_with = "explain")]
+        count: bool,
+    },
+
+    /// View a single note by id or hex prefix, resolved against current code.
+    ///
+    /// The one by-id read command: `query` selects by file and line, `list`
+    /// shows the whole store, and this shows exactly one note — its body and
+    /// its current anchor status (`anchored`/`drifted`/`orphaned`), resolved
+    /// against the file as it is now. Identify the note by full id or any
+    /// unambiguous hex prefix of at least 4 characters (`ynotes list --json`
+    /// and `ynotes query --json` carry full ids); an ambiguous prefix is
+    /// refused.
+    ///
+    /// The note resolves against its stored `target`. A note whose file was
+    /// renamed away therefore reads `orphaned` here (its code is not at the old
+    /// path); query the new path, where the rename is followed, to see it
+    /// located.
+    Show {
+        /// Note id, or any unambiguous hex prefix of >= 4 characters.
+        id: String,
+
+        /// Emit machine-readable JSON instead of the text format.
+        #[arg(long)]
+        json: bool,
+
+        /// Also show each rung's outcome (the agreement vector).
+        #[arg(long)]
+        explain: bool,
     },
 
     /// Find note(s) by a stable handle and print their current id(s).

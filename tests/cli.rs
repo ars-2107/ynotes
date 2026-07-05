@@ -68,7 +68,7 @@ fn doctor_json_emits_a_machine_readable_report() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     // Envelope: every --json output rides inside `{success, v, data}`.
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(10));
+    assert_eq!(parsed["v"], serde_json::json!(11));
     let data = &parsed["data"];
     assert!(data.get("version").is_some(), "version key present");
     assert!(data.get("platform").is_some(), "platform key present");
@@ -193,7 +193,7 @@ fn save_then_query_round_trips_through_the_binary() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(10));
+    assert_eq!(parsed["v"], serde_json::json!(11));
     // v=5 unified `query`'s matched/orphaned split into a single `notes`
     // array (status discriminates) — match the new shape here.
     assert_eq!(
@@ -1023,7 +1023,7 @@ fn clap_missing_arg_with_json_emits_failure_envelope_on_stdout() {
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("clap usage errors under --json must emit a valid JSON envelope");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(10));
+    assert_eq!(parsed["v"], serde_json::json!(11));
     assert_eq!(parsed["type"], serde_json::json!("usage"));
     assert!(
         !parsed["error"].as_str().unwrap().is_empty(),
@@ -1048,7 +1048,7 @@ fn clap_unknown_subcommand_with_json_emits_failure_envelope_on_stdout() {
     let parsed: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("valid JSON envelope on stdout");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(10));
+    assert_eq!(parsed["v"], serde_json::json!(11));
     assert_eq!(parsed["type"], serde_json::json!("usage"));
 }
 
@@ -1331,4 +1331,244 @@ fn reindex_indexes_a_duplicated_record_once_and_warns() {
     assert_eq!(parsed["data"]["recovered"].as_array().unwrap().len(), 0);
     assert_eq!(parsed["data"]["dangling"].as_array().unwrap().len(), 0);
     assert_eq!(parsed["data"]["malformed"].as_array().unwrap().len(), 0);
+}
+
+/// Save a helper that returns the note's content-addressed id from `save --json`.
+fn save_note(dir: &std::path::Path, file: &str, at: &str, body: &str) -> String {
+    let out = ynotes()
+        .current_dir(dir)
+        .args(["save", file, at, "-m", body, "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    v["data"]["id"].as_str().expect("save id").to_owned()
+}
+
+#[test]
+fn show_resolves_one_note_by_id_and_by_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("code.rs"),
+        "fn a() {}\nfn target() {}\nfn b() {}\n",
+    )
+    .unwrap();
+    let id = save_note(dir.path(), "code.rs", "2", "load-bearing here");
+
+    // Full id resolves the note, showing its body and anchored status.
+    ynotes()
+        .current_dir(dir.path())
+        .args(["show", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("load-bearing here"))
+        .stdout(predicate::str::contains("anchored"));
+
+    // An unambiguous hex prefix (>= 4 chars) resolves the same note.
+    let prefix: String = id.chars().take(8).collect();
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["show", &prefix, "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(v["data"]["note"]["id"], serde_json::json!(id));
+    assert_eq!(v["data"]["note"]["status"], serde_json::json!("anchored"));
+    assert_eq!(v["data"]["warnings"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn show_rejects_a_missing_or_malformed_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    // Valid hex, matches nothing → usage error (exit 2).
+    ynotes()
+        .current_dir(dir.path())
+        .args(["show", "deadbeef"])
+        .assert()
+        .failure()
+        .code(2);
+    // Too short (< 4 hex) → usage error, never a runtime "not found".
+    ynotes()
+        .current_dir(dir.path())
+        .args(["show", "ab"])
+        .assert()
+        .failure()
+        .code(2);
+    // Non-hex → usage error.
+    ynotes()
+        .current_dir(dir.path())
+        .args(["show", "zzzz"])
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn show_on_a_deleted_target_is_orphaned_not_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("code.rs"),
+        "fn a() {}\nfn unique_anchor_bait_42() {}\nfn b() {}\n",
+    )
+    .unwrap();
+    let id = save_note(dir.path(), "code.rs", "2", "context that outlives the file");
+    std::fs::remove_file(dir.path().join("code.rs")).unwrap();
+
+    // The note still shows (never dropped, invariant #4) — orphaned, exit 0,
+    // and `--json` flags the missing target in `warnings`.
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["show", &id, "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(v["data"]["note"]["status"], serde_json::json!("orphaned"));
+    assert_eq!(v["data"]["note"]["resolved_range"], serde_json::Value::Null);
+    assert_eq!(
+        v["data"]["note"]["body"],
+        serde_json::json!("context that outlives the file")
+    );
+    assert!(
+        !v["data"]["warnings"].as_array().unwrap().is_empty(),
+        "the missing target file is flagged in warnings"
+    );
+}
+
+#[test]
+fn query_count_summarises_without_bodies() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("code.rs"),
+        "fn a() {}\nfn target() {}\nfn b() {}\n",
+    )
+    .unwrap();
+    save_note(
+        dir.path(),
+        "code.rs",
+        "2",
+        "the-body-text-should-not-appear",
+    );
+
+    // Text summary reports the tally and withholds the body.
+    ynotes()
+        .current_dir(dir.path())
+        .args(["query", "code.rs", "2", "--count"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 note"))
+        .stdout(predicate::str::contains("1 anchored"))
+        .stdout(predicate::str::contains("the-body-text-should-not-appear").not());
+
+    // JSON carries the `count` breakdown and no `notes` array.
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["query", "code.rs", "2", "--count", "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(v["data"]["count"]["total"], serde_json::json!(1));
+    assert_eq!(v["data"]["count"]["anchored"], serde_json::json!(1));
+    assert_eq!(v["data"]["malformed"], serde_json::json!(0));
+    assert!(
+        v["data"]["notes"].is_null(),
+        "count mode replaces the notes array"
+    );
+}
+
+#[test]
+fn list_count_tallies_the_whole_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.path().join("b.rs"), "fn b() {}\n").unwrap();
+    save_note(dir.path(), "a.rs", "1", "note a");
+    save_note(dir.path(), "b.rs", "1", "note b");
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["list", "--count", "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert_eq!(v["data"]["count"]["total"], serde_json::json!(2));
+    assert_eq!(v["data"]["count"]["anchored"], serde_json::json!(2));
+    assert!(v["data"]["notes"].is_null());
+}
+
+#[test]
+fn count_conflicts_with_explain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("x.rs"), "a\nb\n").unwrap();
+    // clap rejects the mutually-exclusive pair before the command runs (exit 2).
+    ynotes()
+        .current_dir(dir.path())
+        .args(["query", "x.rs", "1", "--count", "--explain"])
+        .assert()
+        .failure()
+        .code(2);
+    ynotes()
+        .current_dir(dir.path())
+        .args(["list", "--count", "--explain"])
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn list_explain_surfaces_the_rung_vector() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("code.rs"),
+        "fn a() {}\nfn target() {}\nfn b() {}\n",
+    )
+    .unwrap();
+    save_note(dir.path(), "code.rs", "2", "note here");
+
+    // `--explain` on `list` populates the same `rungs` field `query` does.
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["list", "--explain", "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
+    assert!(v["data"]["notes"][0]["rungs"].is_array());
 }

@@ -90,6 +90,38 @@ fn every_command_json_payload_conforms_to_the_schema() {
         &run_json(p, &["query", "code.rs", "--json"]),
     );
     assert_conforms(&v, "list", &run_json(p, &["list", "--json"]));
+    // --count summary mode (v11): a `count` breakdown in place of the notes,
+    // with `malformed` as an integer — a distinct `oneOf` branch from the full
+    // query/list payloads.
+    assert_conforms(
+        &v,
+        "query (count)",
+        &run_json(p, &["query", "code.rs", "2", "--count", "--json"]),
+    );
+    assert_conforms(
+        &v,
+        "list (count)",
+        &run_json(p, &["list", "--count", "--json"]),
+    );
+    // --explain populates the optional `rungs` field; validate it on both query
+    // and list (the latter gained --explain in v11).
+    assert_conforms(
+        &v,
+        "query (explain)",
+        &run_json(p, &["query", "code.rs", "2", "--explain", "--json"]),
+    );
+    assert_conforms(
+        &v,
+        "list (explain)",
+        &run_json(p, &["list", "--explain", "--json"]),
+    );
+    // show <id> (v11): the by-id read, resolved against the stored target.
+    assert_conforms(&v, "show", &run_json(p, &["show", &id, "--json"]));
+    assert_conforms(
+        &v,
+        "show (explain)",
+        &run_json(p, &["show", &id, "--explain", "--json"]),
+    );
     assert_conforms(
         &v,
         "lookup",
@@ -269,7 +301,7 @@ fn the_validator_rejects_non_conforming_output() {
     // A success envelope whose `data` matches none of the payload `oneOf`
     // branches (each is `additionalProperties: false` with required fields).
     let unknown_payload = serde_json::json!({
-        "success": true, "v": 10, "data": { "not_a_real_payload": 1 }
+        "success": true, "v": 11, "data": { "not_a_real_payload": 1 }
     });
     assert!(
         v.iter_errors(&unknown_payload).next().is_some(),
@@ -286,7 +318,7 @@ fn the_validator_rejects_non_conforming_output() {
     // A query payload missing the now-required `malformed` array must fail —
     // this is exactly the drift the suite exists to catch.
     let missing_malformed = serde_json::json!({
-        "success": true, "v": 10,
+        "success": true, "v": 11,
         "data": { "query": { "file": "x", "at": "" }, "notes": [], "warnings": [] }
     });
     assert!(

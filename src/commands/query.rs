@@ -12,7 +12,8 @@ use ynotes::{LineSpec, QueryResult, Store};
 
 use super::json_envelope;
 use super::render::{
-    MalformedView, NoteView, malformed_view, note_view, write_text_malformed, write_text_note,
+    CountView, MalformedView, NoteView, count_view, malformed_view, note_view, write_count_line,
+    write_text_malformed, write_text_note,
 };
 use crate::command_error::CommandError;
 
@@ -29,11 +30,13 @@ pub(crate) fn run(
     at: Option<&str>,
     json: bool,
     explain: bool,
+    count: bool,
 ) -> Result<(), CommandError> {
-    if json {
-        json_envelope::wrap(|| run_json(file, at, explain))
-    } else {
-        run_text(file, at, explain)
+    match (json, count) {
+        (true, true) => json_envelope::wrap(|| run_count_json(file, at)),
+        (true, false) => json_envelope::wrap(|| run_json(file, at, explain)),
+        (false, true) => run_count_text(file, at),
+        (false, false) => run_text(file, at, explain),
     }
 }
 
@@ -101,6 +104,57 @@ fn run_json(file: &Path, at: Option<&str>, explain: bool) -> Result<(), CommandE
         warnings,
     };
     json_envelope::print_success(&data)
+}
+
+/// `query --count --json` payload: the status breakdown instead of the note
+/// bodies. Same resolution as [`run_json`] (rename-following included, per the
+/// full-and-correct contract), only the output is condensed — a `count` object
+/// and a `malformed` tally in place of the `notes`/`malformed` arrays.
+#[derive(Serialize)]
+struct QueryCountData<'a> {
+    query: QuerySpecView<'a>,
+    count: CountView,
+    /// How many records the index pointed at could not be read — the count-mode
+    /// analogue of the full payload's `malformed[]`, so an agent in summary mode
+    /// still learns a corrupt record is present (invariant #4).
+    malformed: usize,
+    warnings: Vec<String>,
+}
+
+fn run_count_json(file: &Path, at: Option<&str>) -> Result<(), CommandError> {
+    let store = Store::discover().map_err(CommandError::Engine)?;
+    let spec =
+        LineSpec::from_str(at.unwrap_or("")).map_err(|e| CommandError::Usage(e.to_string()))?;
+    let result = ynotes::query(&store, file, spec)?;
+
+    let mut warnings: Vec<String> = Vec::new();
+    if !file.exists() {
+        warnings.push(format!(
+            "`{}` does not exist (check the path)",
+            file.display()
+        ));
+    }
+    let count = count_view(result.matched.iter().chain(result.orphaned.iter()));
+    let data = QueryCountData {
+        query: QuerySpecView {
+            file: file.to_string_lossy().into_owned(),
+            at: at.unwrap_or(""),
+        },
+        count,
+        malformed: result.malformed.len(),
+        warnings,
+    };
+    json_envelope::print_success(&data)
+}
+
+fn run_count_text(file: &Path, at: Option<&str>) -> Result<(), CommandError> {
+    let store = Store::discover().map_err(CommandError::Engine)?;
+    let spec =
+        LineSpec::from_str(at.unwrap_or("")).map_err(|e| CommandError::Usage(e.to_string()))?;
+    let result = ynotes::query(&store, file, spec)?;
+    let count = count_view(result.matched.iter().chain(result.orphaned.iter()));
+    let mut out = std::io::stdout().lock();
+    write_count_line(&mut out, &count, result.malformed.len())
 }
 
 fn run_text(file: &Path, at: Option<&str>, explain: bool) -> Result<(), CommandError> {

@@ -19,6 +19,7 @@ pub(crate) mod reindex;
 pub(crate) mod render;
 pub(crate) mod safety;
 pub(crate) mod save;
+pub(crate) mod show;
 pub(crate) mod update;
 
 use crate::cli::{Cli, Command};
@@ -44,8 +45,15 @@ pub(crate) fn dispatch(cli: &Cli) -> Result<(), CommandError> {
             at,
             json,
             explain,
-        } => query::run(file, at.as_deref(), *json, *explain),
-        Command::List { file, json } => list::run(file.as_deref(), *json),
+            count,
+        } => query::run(file, at.as_deref(), *json, *explain, *count),
+        Command::List {
+            file,
+            json,
+            explain,
+            count,
+        } => list::run(file.as_deref(), *json, *explain, *count),
+        Command::Show { id, json, explain } => show::run(id, *json, *explain),
         Command::Lookup {
             target,
             body_contains,

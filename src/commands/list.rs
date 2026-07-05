@@ -9,7 +9,8 @@ use ynotes::Store;
 
 use super::json_envelope;
 use super::render::{
-    MalformedView, NoteView, malformed_view, note_view, write_text_malformed, write_text_note,
+    CountView, MalformedView, NoteView, count_view, malformed_view, note_view, write_count_line,
+    write_text_malformed, write_text_note,
 };
 use crate::command_error::CommandError;
 use ynotes::ResolvedNote;
@@ -21,11 +22,17 @@ use ynotes::ResolvedNote;
 /// [`CommandError::Engine`] if the store or a note cannot be read. Under
 /// `--json`, any failure is rendered as the agent-contract failure envelope
 /// on stdout and returned as [`CommandError::Rendered`].
-pub(crate) fn run(file: Option<&Path>, json: bool) -> Result<(), CommandError> {
-    if json {
-        json_envelope::wrap(|| run_json(file))
-    } else {
-        run_text(file)
+pub(crate) fn run(
+    file: Option<&Path>,
+    json: bool,
+    explain: bool,
+    count: bool,
+) -> Result<(), CommandError> {
+    match (json, count) {
+        (true, true) => json_envelope::wrap(|| run_count_json(file)),
+        (true, false) => json_envelope::wrap(|| run_json(file, explain)),
+        (false, true) => run_count_text(file),
+        (false, false) => run_text(file, explain),
     }
 }
 
@@ -44,19 +51,19 @@ struct ListData {
     warnings: Vec<String>,
 }
 
-fn run_json(file: Option<&Path>) -> Result<(), CommandError> {
+fn run_json(file: Option<&Path>, explain: bool) -> Result<(), CommandError> {
     let store = Store::discover().map_err(CommandError::Engine)?;
     let result = ynotes::list(&store, file)?;
     let warnings = list_warnings(file, &result.notes);
     let data = ListData {
-        notes: result.notes.iter().map(|n| note_view(n, false)).collect(),
+        notes: result.notes.iter().map(|n| note_view(n, explain)).collect(),
         malformed: result.malformed.iter().map(malformed_view).collect(),
         warnings,
     };
     json_envelope::print_success(&data)
 }
 
-fn run_text(file: Option<&Path>) -> Result<(), CommandError> {
+fn run_text(file: Option<&Path>, explain: bool) -> Result<(), CommandError> {
     let store = Store::discover().map_err(CommandError::Engine)?;
     let result = ynotes::list(&store, file)?;
     let mut out = std::io::stdout().lock();
@@ -67,13 +74,45 @@ fn run_text(file: Option<&Path>) -> Result<(), CommandError> {
         }
     } else {
         for rn in &result.notes {
-            write_text_note(&mut out, rn, false)?;
+            write_text_note(&mut out, rn, explain)?;
         }
         for m in &result.malformed {
             write_text_malformed(&mut out, m)?;
         }
     }
     Ok(())
+}
+
+/// `list --count --json` payload: the status breakdown across the listed set in
+/// place of the `notes` array. Same resolution as [`run_json`], condensed.
+#[derive(Serialize)]
+struct ListCountData {
+    count: CountView,
+    /// How many records the index pointed at could not be read — the count-mode
+    /// analogue of the full payload's `malformed[]` (invariant #4).
+    malformed: usize,
+    warnings: Vec<String>,
+}
+
+fn run_count_json(file: Option<&Path>) -> Result<(), CommandError> {
+    let store = Store::discover().map_err(CommandError::Engine)?;
+    let result = ynotes::list(&store, file)?;
+    let warnings = list_warnings(file, &result.notes);
+    let count = count_view(result.notes.iter());
+    let data = ListCountData {
+        count,
+        malformed: result.malformed.len(),
+        warnings,
+    };
+    json_envelope::print_success(&data)
+}
+
+fn run_count_text(file: Option<&Path>) -> Result<(), CommandError> {
+    let store = Store::discover().map_err(CommandError::Engine)?;
+    let result = ynotes::list(&store, file)?;
+    let count = count_view(result.notes.iter());
+    let mut out = std::io::stdout().lock();
+    write_count_line(&mut out, &count, result.malformed.len())
 }
 
 /// Advisories for the filter-yielded-nothing cases — exactly the cases where

@@ -233,6 +233,64 @@ fn rung_view(o: &ynotes::RungOutcome) -> RungView {
     }
 }
 
+/// The status breakdown emitted by `--count` summary mode. A pure tally over a
+/// resolved set — the cheap answer an agent reads to decide whether to pull
+/// bodies, without paying the tokens for them. `total` equals
+/// `anchored + drifted + orphaned`.
+#[derive(Serialize)]
+pub(crate) struct CountView {
+    pub(crate) total: u32,
+    pub(crate) anchored: u32,
+    pub(crate) drifted: u32,
+    pub(crate) orphaned: u32,
+}
+
+/// Tally resolved notes by anchor status for `--count`. Shared by `query` and
+/// `list` so the two summarise identically.
+pub(crate) fn count_view<'a>(notes: impl Iterator<Item = &'a ResolvedNote>) -> CountView {
+    let mut c = CountView {
+        total: 0,
+        anchored: 0,
+        drifted: 0,
+        orphaned: 0,
+    };
+    for rn in notes {
+        c.total += 1;
+        match rn.resolution.status {
+            AnchorStatus::Anchored => c.anchored += 1,
+            AnchorStatus::Drifted { .. } => c.drifted += 1,
+            AnchorStatus::Orphaned { .. } => c.orphaned += 1,
+        }
+    }
+    c
+}
+
+/// Render a `--count` summary as human text: one tally line, plus a red
+/// unreadable-records line when the index pointed at records that could not be
+/// read — so a corrupt record is flagged in the summary too, never hidden
+/// (invariant #4). Shared by `query` and `list`.
+pub(crate) fn write_count_line(
+    out: &mut impl Write,
+    count: &CountView,
+    malformed: usize,
+) -> Result<(), CommandError> {
+    let noun = if count.total == 1 { "note" } else { "notes" };
+    writeln!(
+        out,
+        "{} {noun}: {} anchored, {} drifted, {} orphaned",
+        count.total, count.anchored, count.drifted, count.orphaned,
+    )?;
+    if malformed > 0 {
+        let mnoun = if malformed == 1 { "record" } else { "records" };
+        writeln!(
+            out,
+            "{}",
+            paint(&format!("{malformed} unreadable {mnoun}"), Colour::Red),
+        )?;
+    }
+    Ok(())
+}
+
 /// Hex-id short form for the human text: the first 12 characters — enough to
 /// disambiguate in any realistic store while staying scannable. Shared
 /// between `delete`, `update`, `prune`, and `reanchor` so the four

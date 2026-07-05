@@ -43,7 +43,7 @@ fn json_contract_is_stable_and_id_is_deterministic() {
     insta::assert_snapshot!(save_json.trim(), @r#"
     {
       "success": true,
-      "v": 10,
+      "v": 11,
       "data": {
         "id": "23df0ca3934b6b67a004dbaa21c5daf668869bee013d55f5b6f7768fabfd5ae0",
         "target": "code.rs",
@@ -66,7 +66,7 @@ fn json_contract_is_stable_and_id_is_deterministic() {
     insta::assert_snapshot!(query_json.trim(), @r#"
     {
       "success": true,
-      "v": 10,
+      "v": 11,
       "data": {
         "query": {
           "file": "code.rs",
@@ -122,7 +122,7 @@ fn save_json_escapes_a_special_character_in_the_target_path() {
     let parsed: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("save --json must emit valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(10));
+    assert_eq!(parsed["v"], serde_json::json!(11));
     assert_eq!(parsed["data"]["target"], serde_json::json!(name));
     assert_eq!(parsed["data"]["created"], serde_json::json!(true));
 }
@@ -152,7 +152,7 @@ fn query_json_emits_failure_envelope_on_invalid_input() {
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("--json must always emit valid JSON, even on failure");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(10));
+    assert_eq!(parsed["v"], serde_json::json!(11));
     assert_eq!(parsed["type"], serde_json::json!("engine"));
     assert!(
         parsed["error"]
@@ -190,7 +190,7 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     insta::assert_snapshot!(empty_json.trim(), @r#"
     {
       "success": true,
-      "v": 10,
+      "v": 11,
       "data": {
         "dry_run": false,
         "changed": [],
@@ -229,7 +229,7 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(10));
+    assert_eq!(parsed["v"], serde_json::json!(11));
     let data = &parsed["data"];
     assert_eq!(data["dry_run"], serde_json::json!(false));
     assert_eq!(data["changed"].as_array().unwrap().len(), 0);
@@ -270,7 +270,7 @@ fn reindex_json_envelope_is_stable_on_a_healthy_store() {
     insta::assert_snapshot!(reindex_json.trim(), @r#"
     {
       "success": true,
-      "v": 10,
+      "v": 11,
       "data": {
         "dry_run": false,
         "scanned": 1,
@@ -323,7 +323,7 @@ fn lookup_json_contract_is_stable() {
     insta::assert_snapshot!(json.trim(), @r#"
     {
       "success": true,
-      "v": 10,
+      "v": 11,
       "data": {
         "notes": [
           {
@@ -339,6 +339,137 @@ fn lookup_json_contract_is_stable() {
             "body": "load-bearing"
           }
         ]
+      }
+    }
+    "#);
+}
+
+/// `show --json` is the by-id read surface added in `v11`. Snapshot the
+/// anchored single-note case: the payload is `showData` (`{note, warnings}`),
+/// and the id is content-addressed so it is identical on every machine. The
+/// ambiguous/not-found paths are usage errors covered behaviourally in
+/// `tests/cli.rs`.
+#[test]
+fn show_json_contract_is_stable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("code.rs"),
+        "fn a() {}\nfn target() {}\nfn b() {}\n",
+    )
+    .unwrap();
+    let save = ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "2", "-m", "load-bearing", "--json"])
+        .assert()
+        .success();
+    let save_json = String::from_utf8(save.get_output().stdout.clone()).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(save_json.trim()).unwrap();
+    let id = parsed["data"]["id"].as_str().unwrap().to_owned();
+
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args(["show", &id, "--json"])
+        .assert()
+        .success();
+    let json = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    insta::assert_snapshot!(json.trim(), @r#"
+    {
+      "success": true,
+      "v": 11,
+      "data": {
+        "note": {
+          "id": "23df0ca3934b6b67a004dbaa21c5daf668869bee013d55f5b6f7768fabfd5ae0",
+          "target": "code.rs",
+          "scope": "range",
+          "status": "anchored",
+          "stale": false,
+          "resolved_range": [
+            2,
+            2
+          ],
+          "body": "load-bearing"
+        },
+        "warnings": []
+      }
+    }
+    "#);
+}
+
+/// `query --count --json` and `list --count --json` are the summary surfaces
+/// added in `v11`: a `count` breakdown in place of the note bodies, with a
+/// `malformed` *count* (not an array). Snapshot both on a one-note store — the
+/// shape a consumer must accept — proving the resolution is unchanged and only
+/// the output is condensed.
+#[test]
+fn count_json_contract_is_stable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("code.rs"),
+        "fn a() {}\nfn target() {}\nfn b() {}\n",
+    )
+    .unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "code.rs", "2", "-m", "load-bearing"])
+        .assert()
+        .success();
+
+    let q = ynotes()
+        .current_dir(dir.path())
+        .args(["query", "code.rs", "2", "--count", "--json"])
+        .assert()
+        .success();
+    let q_json = String::from_utf8(q.get_output().stdout.clone()).unwrap();
+    insta::assert_snapshot!(q_json.trim(), @r#"
+    {
+      "success": true,
+      "v": 11,
+      "data": {
+        "query": {
+          "file": "code.rs",
+          "at": "2"
+        },
+        "count": {
+          "total": 1,
+          "anchored": 1,
+          "drifted": 0,
+          "orphaned": 0
+        },
+        "malformed": 0,
+        "warnings": []
+      }
+    }
+    "#);
+
+    let l = ynotes()
+        .current_dir(dir.path())
+        .args(["list", "--count", "--json"])
+        .assert()
+        .success();
+    let l_json = String::from_utf8(l.get_output().stdout.clone()).unwrap();
+    insta::assert_snapshot!(l_json.trim(), @r#"
+    {
+      "success": true,
+      "v": 11,
+      "data": {
+        "count": {
+          "total": 1,
+          "anchored": 1,
+          "drifted": 0,
+          "orphaned": 0
+        },
+        "malformed": 0,
+        "warnings": []
       }
     }
     "#);
