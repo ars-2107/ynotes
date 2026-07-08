@@ -4,10 +4,8 @@
 //! regression.
 //!
 //! [`McpSession`] is the shared harness the tool tests (`recall`, `remember`,
-//! …) reuse; `tool_call` and the stashed handshake fields are the contract
-//! those later tests speak, so some of them are unexercised until then —
-//! hence the module-level `dead_code` allowance.
-#![allow(dead_code)]
+//! …) reuse: `tool_call` and the stashed handshake fields (`instructions`,
+//! `server_name`, `capabilities`) are the contract those tests speak.
 
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::Path;
@@ -116,6 +114,78 @@ impl Drop for McpSession {
         drop(self.child.kill());
         drop(self.child.wait());
     }
+}
+
+/// Run the `ynotes` binary in `dir`, asserting it exits successfully. Used to
+/// build a real store (`init`) and populate it (`save`) before the server sees
+/// it — the wire tests exercise the same on-disk artefacts a client would.
+fn run_cli(dir: &Path, args: &[&str]) {
+    let status = Command::new(env!("CARGO_BIN_EXE_ynotes"))
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run ynotes");
+    assert!(status.success(), "`ynotes {args:?}` failed");
+}
+
+/// A tempdir holding a git-less store with one range note (lines 2-3 of
+/// `f.txt`) whose body is `body`, built through the real CLI.
+fn repo_with_note(body: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbravo\ncharlie\ndelta\n").unwrap();
+    run_cli(dir.path(), &["init"]);
+    run_cli(dir.path(), &["save", "f.txt", "2:3", "-m", body]);
+    dir
+}
+
+#[test]
+fn recall_returns_saved_note_body() {
+    let dir = repo_with_note("deliberate: leave the retry loop");
+    let mut s = mcp_session(dir.path());
+    let result = s.tool_call("recall", &serde_json::json!({"file": "f.txt"}));
+    assert_ne!(
+        result["isError"],
+        serde_json::json!(true),
+        "tool error: {result}"
+    );
+    let text = result["content"][0]["text"].as_str().expect("text block");
+    let payload: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        payload["notes"][0]["body"],
+        "deliberate: leave the retry loop"
+    );
+}
+
+#[test]
+fn recall_count_mode_reports_total() {
+    let dir = repo_with_note("x");
+    let mut s = mcp_session(dir.path());
+    let result = s.tool_call(
+        "recall",
+        &serde_json::json!({"file": "f.txt", "count": true}),
+    );
+    let text = result["content"][0]["text"].as_str().expect("text block");
+    let payload: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(payload["count"]["total"], 1);
+}
+
+#[test]
+fn recall_without_store_is_store_absent_success() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "alpha\n").unwrap();
+    let mut s = mcp_session(dir.path());
+    let result = s.tool_call("recall", &serde_json::json!({"file": "f.txt"}));
+    assert_ne!(
+        result["isError"],
+        serde_json::json!(true),
+        "store-absent must be a success: {result}"
+    );
+    let text = result["content"][0]["text"].as_str().expect("text block");
+    let payload: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(payload["store"], "absent");
 }
 
 #[test]

@@ -3,12 +3,14 @@
 
 use rmcp::{
     ServerHandler,
-    handler::server::router::tool::ToolRouter,
-    model::{Implementation, ServerCapabilities, ServerInfo},
-    tool_handler, tool_router,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo},
+    tool, tool_handler, tool_router,
 };
 
 use crate::instructions::INSTRUCTIONS;
+use crate::recall::RecallArgs;
+use crate::tools::tool_err;
 
 /// One instance serves one stdio client (the spawning agent session).
 #[derive(Clone)]
@@ -18,13 +20,25 @@ pub(crate) struct YnotesServer {
 
 #[tool_router]
 impl YnotesServer {
-    /// Build a server with its (currently empty) tool router.
+    /// Build a server with its tool router.
     pub(crate) fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
         }
     }
-    // Tools land here in later tasks: recall, remember, forget, notes, reanchor.
+    /// See spec §5.1 — description text verbatim from the design doc.
+    #[tool(
+        description = "Return the context notes overlapping a file or line region. Call before editing or reviewing code you did not write this session - code that looks wrong may have a note explaining why it is deliberate. Statuses: anchored (trust it), drifted (region moved or changed - verify against current code), orphaned (region gone - historical only). Notes follow file renames. Returns {\"store\":\"absent\"} when the repo has no note store. Use count: true to cheaply check whether context exists before pulling bodies.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn recall(&self, Parameters(args): Parameters<RecallArgs>) -> CallToolResult {
+        // The engine is synchronous; run it on the blocking pool so it never
+        // stalls the current-thread runtime driving the stdio transport.
+        tokio::task::spawn_blocking(move || crate::recall::run(&args))
+            .await
+            .unwrap_or_else(|e| tool_err("engine", format!("task join: {e}")))
+    }
+    // Remaining tools land in later tasks: remember, forget, notes, reanchor.
 }
 
 // `router = self.tool_router` binds the generated `call_tool`/`list_tools`

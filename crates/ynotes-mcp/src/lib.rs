@@ -7,7 +7,9 @@
 //! diagnostics go to stderr.
 
 mod instructions;
+mod recall;
 mod server;
+mod tools;
 
 /// Failures starting or running the server (transport-level; per-tool
 /// failures are in-band MCP tool errors, never process exits).
