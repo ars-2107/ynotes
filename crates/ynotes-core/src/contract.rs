@@ -28,7 +28,7 @@ use crate::store::MalformedNote;
 /// The current `--json` contract version. Bumped when any field changes;
 /// mirrored in `tests/agent_contract.rs` and `ynotes.schema.json`
 /// (invariant #7).
-pub const CONTRACT_VERSION: u8 = 11;
+pub const CONTRACT_VERSION: u8 = 12;
 
 /// `[a, b]` for a resolved range, `null` for an orphan.
 type RangePair = Option<[u32; 2]>;
@@ -339,6 +339,11 @@ pub struct SaveData {
     /// `true` if this call created the note; `false` if an identical note
     /// already existed (`save` is idempotent — invariant #6).
     pub created: bool,
+    /// `true` when this save also bootstrapped the `.ynotes` store — the first
+    /// save in a repository creates one at the git root. Carried so an agent
+    /// learns adoption happened on the same call, without a separate `init`
+    /// (the zero-ceremony bootstrap signal); `false` on every later save.
+    pub store_created: bool,
 }
 
 /// Stable JSON payload for `delete --json`.

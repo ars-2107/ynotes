@@ -17,8 +17,8 @@ explicitly here.
   `ynotes init`. Placement is deterministic (repo root only); with no git root
   the save still fails and directs you to `ynotes init`. `$YNOTES_DIR` keeps its
   override precedence and is never a creation site — pointing it at a non-store
-  is refused rather than bootstrapping there. The `--json` payload is unchanged
-  for now.
+  is refused rather than bootstrapping there. `save --json` reports it as
+  `saveData.store_created` (contract v12, below).
 - **`ynotes show <id>`**: view a single note by full id or unambiguous hex
   prefix (>= 4 chars), resolved against current code — the by-id read that sat
   between `query` (by file/line) and `list` (the whole store). Shows the body
@@ -146,6 +146,12 @@ explicitly here.
   it from an older commit (still correct, marginally more work).
 
 ### Changed
+- `--json` agent contract bumped to `v: 12` (adds `saveData.store_created` — a
+  boolean, `true` only on the `save` that bootstrapped the `.ynotes` store, so
+  an agent learns the first-save auto-init happened on the same call — and adds
+  the `storeAbsent` `$defs` shape a future MCP read tool will emit in a
+  repository with no store; no existing field changed; mirrored in
+  `tests/agent_contract.rs` and `ynotes.schema.json`).
 - `--json` agent contract bumped to `v: 10` (adds the always-present
   `relocated[]` array to `reanchor` and the optional `relocated_from` field to
   the shared resolved-`note` object; no existing field changed; mirrored in

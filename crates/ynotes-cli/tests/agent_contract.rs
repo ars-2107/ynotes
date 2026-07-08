@@ -43,7 +43,7 @@ fn json_contract_is_stable_and_id_is_deterministic() {
     insta::assert_snapshot!(save_json.trim(), @r#"
     {
       "success": true,
-      "v": 11,
+      "v": 12,
       "data": {
         "id": "23df0ca3934b6b67a004dbaa21c5daf668869bee013d55f5b6f7768fabfd5ae0",
         "target": "code.rs",
@@ -52,7 +52,8 @@ fn json_contract_is_stable_and_id_is_deterministic() {
           2,
           2
         ],
-        "created": true
+        "created": true,
+        "store_created": false
       }
     }
     "#);
@@ -66,7 +67,7 @@ fn json_contract_is_stable_and_id_is_deterministic() {
     insta::assert_snapshot!(query_json.trim(), @r#"
     {
       "success": true,
-      "v": 11,
+      "v": 12,
       "data": {
         "query": {
           "file": "code.rs",
@@ -122,7 +123,7 @@ fn save_json_escapes_a_special_character_in_the_target_path() {
     let parsed: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("save --json must emit valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(11));
+    assert_eq!(parsed["v"], serde_json::json!(12));
     assert_eq!(parsed["data"]["target"], serde_json::json!(name));
     assert_eq!(parsed["data"]["created"], serde_json::json!(true));
 }
@@ -152,7 +153,7 @@ fn query_json_emits_failure_envelope_on_invalid_input() {
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("--json must always emit valid JSON, even on failure");
     assert_eq!(parsed["success"], serde_json::json!(false));
-    assert_eq!(parsed["v"], serde_json::json!(11));
+    assert_eq!(parsed["v"], serde_json::json!(12));
     assert_eq!(parsed["type"], serde_json::json!("engine"));
     assert!(
         parsed["error"]
@@ -190,7 +191,7 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     insta::assert_snapshot!(empty_json.trim(), @r#"
     {
       "success": true,
-      "v": 11,
+      "v": 12,
       "data": {
         "dry_run": false,
         "changed": [],
@@ -229,7 +230,7 @@ fn reanchor_json_envelope_is_stable_on_an_empty_store_and_on_an_orphan() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
     assert_eq!(parsed["success"], serde_json::json!(true));
-    assert_eq!(parsed["v"], serde_json::json!(11));
+    assert_eq!(parsed["v"], serde_json::json!(12));
     let data = &parsed["data"];
     assert_eq!(data["dry_run"], serde_json::json!(false));
     assert_eq!(data["changed"].as_array().unwrap().len(), 0);
@@ -270,7 +271,7 @@ fn reindex_json_envelope_is_stable_on_a_healthy_store() {
     insta::assert_snapshot!(reindex_json.trim(), @r#"
     {
       "success": true,
-      "v": 11,
+      "v": 12,
       "data": {
         "dry_run": false,
         "scanned": 1,
@@ -323,7 +324,7 @@ fn lookup_json_contract_is_stable() {
     insta::assert_snapshot!(json.trim(), @r#"
     {
       "success": true,
-      "v": 11,
+      "v": 12,
       "data": {
         "notes": [
           {
@@ -380,7 +381,7 @@ fn show_json_contract_is_stable() {
     insta::assert_snapshot!(json.trim(), @r#"
     {
       "success": true,
-      "v": 11,
+      "v": 12,
       "data": {
         "note": {
           "id": "23df0ca3934b6b67a004dbaa21c5daf668869bee013d55f5b6f7768fabfd5ae0",
@@ -433,7 +434,7 @@ fn count_json_contract_is_stable() {
     insta::assert_snapshot!(q_json.trim(), @r#"
     {
       "success": true,
-      "v": 11,
+      "v": 12,
       "data": {
         "query": {
           "file": "code.rs",
@@ -460,7 +461,7 @@ fn count_json_contract_is_stable() {
     insta::assert_snapshot!(l_json.trim(), @r#"
     {
       "success": true,
-      "v": 11,
+      "v": 12,
       "data": {
         "count": {
           "total": 1,

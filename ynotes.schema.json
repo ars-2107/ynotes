@@ -61,7 +61,7 @@
       "title": "save --json data",
       "description": "Payload for `ynotes save --json`: the saved note's identity. The id is a content hash of (target, scope, anchor, body) with no timestamp, so it is deterministic across machines and a retried identical save is a no-op. Note: a subsequent `reanchor` (or `update`) changes the anchor and therefore the id — use (target, scope, body) as the stable lineage when caching a reference.",
       "additionalProperties": false,
-      "required": ["id", "target", "scope", "range", "created"],
+      "required": ["id", "target", "scope", "range", "created", "store_created"],
       "properties": {
         "id": { "$ref": "#/$defs/noteId" },
         "target": { "$ref": "#/$defs/target" },
@@ -73,6 +73,10 @@
         "created": {
           "type": "boolean",
           "description": "true when this save created a new note; false when an identical note already existed (idempotent save)."
+        },
+        "store_created": {
+          "type": "boolean",
+          "description": "True when this save created the .ynotes store (first save in a repo — the zero-ceremony bootstrap)."
         }
       }
     },
@@ -500,6 +504,14 @@
         }
       }
     },
+    "storeAbsent": {
+      "type": "object",
+      "title": "Store absent",
+      "description": "MCP read-tool result in a repository with no .ynotes store: a success, not an error, so an ambient server never error-spams non-adopting repos.",
+      "additionalProperties": false,
+      "required": ["store"],
+      "properties": { "store": { "const": "absent" } }
+    },
     "querySpec": {
       "type": "object",
       "title": "query request echo",
@@ -714,8 +726,8 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "const": 11,
-      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v11 added two read surfaces: the `show` subcommand (`showData` — one note by id/prefix, resolved against its stored target) and a `--count` summary mode on `query` and `list` (`queryCountData` / `listCountData` — a status breakdown in place of the note bodies, so an agent can cheaply check for context before pulling it). Both are additive; `list --explain` also gained the optional `rungs` field that `query --explain` already emitted, with no shape change. v10 followed file renames: `reanchor` gained an always-present `relocated[]` array (notes moved to a renamed file, corroborated at the new path), and the shared resolved-`note` object gained an optional `relocated_from` (present only on a `query` note surfaced under a file it was renamed to — the pre-rename path it is still stored under); no existing payload field changed. v9 added an always-present `deleted_unreadable[]` array to `delete` (ids of *corrupt* records purged by exact id — they cannot be read to supply a target/scope/body, so they are listed as bare ids rather than rich `deleted[]` entries; an entry here is a success, not a failure, and does not flip the exit code); no existing payload field changed. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
+      "const": 12,
+      "description": "The contract version. Bumped on any field change; consumers should reject an unrecognised value. v12 appended `store_created` to `saveData` (a boolean, `true` only on the save that bootstrapped the `.ynotes` store — the zero-ceremony first-save adoption path where a `save` in a git repo with no store creates one at the root) and added the `storeAbsent` `$defs` shape (the success result a future MCP read tool emits in a repository with no store, so an ambient server never error-spams a non-adopting repo); no existing field changed. v11 added two read surfaces: the `show` subcommand (`showData` — one note by id/prefix, resolved against its stored target) and a `--count` summary mode on `query` and `list` (`queryCountData` / `listCountData` — a status breakdown in place of the note bodies, so an agent can cheaply check for context before pulling it). Both are additive; `list --explain` also gained the optional `rungs` field that `query --explain` already emitted, with no shape change. v10 followed file renames: `reanchor` gained an always-present `relocated[]` array (notes moved to a renamed file, corroborated at the new path), and the shared resolved-`note` object gained an optional `relocated_from` (present only on a `query` note surfaced under a file it was renamed to — the pre-rename path it is still stored under); no existing payload field changed. v9 added an always-present `deleted_unreadable[]` array to `delete` (ids of *corrupt* records purged by exact id — they cannot be read to supply a target/scope/body, so they are listed as bare ids rather than rich `deleted[]` entries; an entry here is a success, not a failure, and does not flip the exit code); no existing payload field changed. v8 added an always-present `malformed[]` array to `query` and `list` (records the index points at that cannot be read or parsed — surfaced rather than dropped or made fatal, invariant #4) and a `health` object to `doctor` (store-health diagnostics: malformed records, index drift, missing managed `.gitattributes` lines); no existing payload field changed. v7 added the `lookupData` payload for the new `lookup` subcommand (resolve a stable (target, body) handle to live note ids); no existing payload changed. v6 added the `reindexData` payload for the new `reindex` subcommand (rebuild the by-path index from disk); no existing payload changed. v5 unified `query`'s `matched`/`orphaned` arrays into a single `notes` array (status discriminates), aligning query with `list`, and added payloads for the new `update`, `delete`, and `prune` subcommands. v4 wrapped every payload in a `{success, v, data | error+type}` envelope and emits that envelope on stdout regardless of exit code. v3 added the always-present `warnings` array and collapsed the `line` scope into `range`."
     },
     "lineRange": {
       "type": "array",

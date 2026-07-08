@@ -1,9 +1,9 @@
 //! Shared envelope for every `--json` output.
 //!
-//! Shape (`v: 11` of the agent contract):
+//! Shape (`v: 12` of the agent contract):
 //!
-//! - success: `{"success": true, "v": 11, "data": <command payload>}`
-//! - failure: `{"success": false, "v": 11, "error": "<message>", "type": "<kind>"}`
+//! - success: `{"success": true, "v": 12, "data": <command payload>}`
+//! - failure: `{"success": false, "v": 12, "error": "<message>", "type": "<kind>"}`
 //!
 //! Both shapes are emitted to **stdout**, including the failure case — a
 //! JSON-typed consumer never has to branch on the exit code to parse the
@@ -70,7 +70,7 @@ pub(crate) fn print_error(message: &str, kind: ErrorKind) {
         kind: kind.as_str(),
     };
     let line = serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| {
-        r#"{"success":false,"v":11,"error":"failed to render JSON error envelope","type":"render"}"#
+        r#"{"success":false,"v":12,"error":"failed to render JSON error envelope","type":"render"}"#
             .to_string()
     });
     // Best-effort write — a broken pipe here is unrecoverable and the exit

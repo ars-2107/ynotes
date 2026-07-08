@@ -301,7 +301,7 @@ fn the_validator_rejects_non_conforming_output() {
     // A success envelope whose `data` matches none of the payload `oneOf`
     // branches (each is `additionalProperties: false` with required fields).
     let unknown_payload = serde_json::json!({
-        "success": true, "v": 11, "data": { "not_a_real_payload": 1 }
+        "success": true, "v": 12, "data": { "not_a_real_payload": 1 }
     });
     assert!(
         v.iter_errors(&unknown_payload).next().is_some(),
@@ -318,7 +318,7 @@ fn the_validator_rejects_non_conforming_output() {
     // A query payload missing the now-required `malformed` array must fail —
     // this is exactly the drift the suite exists to catch.
     let missing_malformed = serde_json::json!({
-        "success": true, "v": 11,
+        "success": true, "v": 12,
         "data": { "query": { "file": "x", "at": "" }, "notes": [], "warnings": [] }
     });
     assert!(

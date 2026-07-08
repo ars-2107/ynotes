@@ -102,6 +102,7 @@ fn run_inner(
             scope: scope_word_json(scope).to_owned(),
             range: [range.start(), range.end()],
             created,
+            store_created,
         })?;
     } else {
         let mut out = std::io::stdout().lock();
@@ -110,10 +111,9 @@ fn run_inner(
         } else {
             String::new()
         };
-        // Announce the zero-ceremony bootstrap on the human line only: the first
-        // save in a git repo just created the store, so name where it landed.
-        // The `--json` payload is deliberately untouched here (`store_created`
-        // joins the contract in a later, single-commit `v` bump).
+        // Announce the zero-ceremony bootstrap on the human line: the first save
+        // in a git repo just created the store, so name where it landed. The
+        // `--json` branch above carries the same signal as `store_created`.
         let created_store_clause = if store_created {
             format!(
                 " (created .ynotes store at {})",
