@@ -34,6 +34,9 @@ workspace = true
 # The engine. The path dependency resolves the lib target `ynotes`, so
 # `use ynotes::…` needs no alias.
 ynotes-core = { path = "../ynotes-core" }
+# The MCP front-end, reached only by the `mcp` subcommand. It owns the async
+# runtime; the CLI itself stays synchronous.
+ynotes-mcp = { path = "../ynotes-mcp" }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4"
 serde.workspace = true

@@ -106,15 +106,20 @@ impl ErrorKind {
 
 impl From<&CommandError> for ErrorKind {
     fn from(e: &CommandError) -> Self {
-        // `Rendered` shares the `Render` class as a defensive default — by
-        // construction it is only produced inside [`wrap`] and should not
-        // reach this conversion, so treating it as render-class is the
-        // conservative wildcard.
+        // `Rendered` and `Mcp` share the `Render` class as a defensive default:
+        // by construction neither reaches this conversion. `Rendered` is only
+        // produced inside [`wrap`]; `Mcp` comes from the `mcp` subcommand, which
+        // has no `--json` mode and so never flows through `wrap`. Render-class
+        // is the conservative wildcard — and crucially avoids adding a new
+        // `type` value to the versioned agent contract for a path that never
+        // emits JSON.
         match e {
             CommandError::Usage(_) => ErrorKind::Usage,
             CommandError::Engine(_) => ErrorKind::Engine,
             CommandError::Io(_) => ErrorKind::Io,
-            CommandError::Render(_) | CommandError::Rendered { .. } => ErrorKind::Render,
+            CommandError::Render(_) | CommandError::Rendered { .. } | CommandError::Mcp(_) => {
+                ErrorKind::Render
+            }
         }
     }
 }

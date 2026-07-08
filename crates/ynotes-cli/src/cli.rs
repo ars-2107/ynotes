@@ -302,4 +302,14 @@ pub(crate) enum Command {
         /// The shell to generate completions for (e.g. `bash`, `zsh`, `fish`).
         shell: Shell,
     },
+
+    /// Run the MCP server over stdio.
+    ///
+    /// Spawned by agent clients (Claude Code, Codex, Cursor, …), not run
+    /// interactively: register once with e.g.
+    /// `claude mcp add ynotes -- ynotes mcp`, and the client starts and stops
+    /// the process with each session. Exposes five tools — recall, remember,
+    /// forget, notes, reanchor — returning the same versioned payloads as
+    /// `--json`.
+    Mcp,
 }

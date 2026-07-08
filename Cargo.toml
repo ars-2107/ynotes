@@ -1,4 +1,4 @@
-# ynotes — a workspace with two members.
+# ynotes — a workspace with three members.
 #
 #   crates/ynotes-core   the engine. Every behaviour lives here. The library
 #                        crate; its lib target keeps the historical name
@@ -7,14 +7,16 @@
 #                        engine's results. Its modules (cli, commands, logging,
 #                        command_error) are CLI-only — they cannot leak into the
 #                        engine, which lives in a separate crate.
+#   crates/ynotes-mcp    the MCP stdio server — the agent-facing front-end,
+#                        spawned by `ynotes mcp`. Where async enters the
+#                        workspace; it calls the sync engine via `spawn_blocking`.
 #
-# Two crates, engine + front-end. When a second front-end (an MCP server)
-# becomes real, `ynotes-mcp` joins as a third member beside `ynotes-core` with
-# no logic changes — the boundary already exists. See AGENTS.md.
+# Engine plus two front-ends (CLI and MCP). Both reach the engine through the
+# same library boundary; the engine references neither. See AGENTS.md.
 
 [workspace]
 resolver = "3"
-members = ["crates/ynotes-core", "crates/ynotes-cli"]
+members = ["crates/ynotes-core", "crates/ynotes-cli", "crates/ynotes-mcp"]
 
 # Shared package metadata. Each member inherits these with `field.workspace =
 # true`, so version, MSRV and licence live in one place.

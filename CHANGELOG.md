@@ -10,6 +10,14 @@ explicitly here.
 ## [Unreleased]
 
 ### Added
+- **`ynotes mcp`**: run ynotes as a stdio [MCP](https://modelcontextprotocol.io)
+  server for agent clients (Claude Code, Codex, Cursor, …). Register it once
+  (e.g. `claude mcp add ynotes -- ynotes mcp`) and the client spawns the process
+  per session; it completes the MCP initialize handshake and injects the loop
+  protocol as the server `instructions`. This is scaffold only — the tool router
+  is empty for now; the tools land in a following change. The server lives in a
+  new `ynotes-mcp` workspace crate, the sole home of async (`tokio`/`rmcp`); the
+  engine stays synchronous.
 - **First `save` auto-creates the store at the git root.** Running `save` in a
   git repository with no `.ynotes` yet bootstraps one at the repository root
   (the enclosing `.git` directory *or* file, so worktrees are handled) and says

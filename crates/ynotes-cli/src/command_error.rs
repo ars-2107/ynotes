@@ -48,6 +48,16 @@ pub(crate) enum CommandError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
+    /// The `mcp` subcommand's server front-end failed to start or its stdio
+    /// transport broke. A runtime failure (exit `1`); its message is forwarded
+    /// verbatim. Kept distinct from the engine and the CLI's own I/O — this is
+    /// the MCP front-end (`ynotes-mcp`), which owns the async runtime the CLI
+    /// itself never touches. No existing variant fitted: `Usage` exits `2`,
+    /// `Engine` demands a `ynotes::Error`, and `Io`/`Render` name the wrong
+    /// failure class.
+    #[error(transparent)]
+    Mcp(#[from] ynotes_mcp::ServeError),
+
     /// Output could not be rendered — e.g. the `--json` agent contract failed
     /// to serialise. A runtime failure, so it maps to the failure exit code.
     #[error("cannot render output: {0}")]
@@ -92,9 +102,10 @@ impl CommandError {
         match self {
             CommandError::Usage(_) => codes::USAGE,
             CommandError::Rendered { code } => *code,
-            CommandError::Engine(_) | CommandError::Io(_) | CommandError::Render(_) => {
-                codes::FAILURE
-            }
+            CommandError::Engine(_)
+            | CommandError::Io(_)
+            | CommandError::Render(_)
+            | CommandError::Mcp(_) => codes::FAILURE,
         }
     }
 

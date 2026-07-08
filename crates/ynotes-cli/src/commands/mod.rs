@@ -12,6 +12,7 @@ pub(crate) mod init;
 pub(crate) mod json_envelope;
 pub(crate) mod list;
 pub(crate) mod lookup;
+pub(crate) mod mcp;
 pub(crate) mod prune;
 pub(crate) mod query;
 pub(crate) mod reanchor;
@@ -66,5 +67,6 @@ pub(crate) fn dispatch(cli: &Cli) -> Result<(), CommandError> {
         Command::Reindex { dry_run, json } => reindex::run(*dry_run, *json),
         Command::Doctor { json } => doctor::run(*json),
         Command::Completions { shell } => completions::run(*shell),
+        Command::Mcp => mcp::run(),
     }
 }
