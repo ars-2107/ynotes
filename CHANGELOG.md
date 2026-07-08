@@ -28,8 +28,18 @@ explicitly here.
   removable only by its exact 64-character id; **`notes`** browses the store —
   one note by id, a case-sensitive body-substring search, or the whole inventory
   with each note's anchor status, plus `count: true` for a store-wide status
-  breakdown, and a `{"store":"absent"}` success in a repo with no store. The
-  remaining tool (`reanchor`) lands in a following change.
+  breakdown, and a `{"store":"absent"}` success in a repo with no store;
+  **`reanchor`** persists re-anchors for every note that confidently moved — a
+  mirror of the `reanchor` command and the sole resolve-time write path
+  (invariant #8): it refreshes selectors, follows committed file renames, and
+  never touches an orphaned note, with a `dry_run` preview and the same
+  `{"store":"absent"}` success in a repo with no store. That completes the
+  five-tool surface (`forget` `notes` `reanchor` `recall` `remember`), now
+  frozen by a reviewed `tools/list` snapshot so any future change to a tool's
+  name, description, or annotations is a reviewed diff rather than a silent
+  drift, and validated end-to-end: a conformance sweep checks every tool's real
+  over-the-wire payload against the published `ynotes.schema.json`, extending
+  invariant #7's cannot-fork-silently guarantee to the MCP face.
   The server lives in a new `ynotes-mcp` workspace crate, the sole home of async
   (`tokio`/`rmcp`); the engine stays synchronous.
 - **First `save` auto-creates the store at the git root.** Running `save` in a

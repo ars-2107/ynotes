@@ -50,8 +50,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 assert_cmd = "2"
 predicates = "3"
 # Snapshot testing. A natural fit for ynotes's structured drift/diff output:
-# assert on rendered text, review changes as diffs.
-insta = "1"
+# assert on rendered text, review changes as diffs. The `json` feature backs
+# `assert_json_snapshot!`, which freezes the MCP tools/list surface.
+insta = { version = "1", features = ["json"] }
 # Validates real `--json` output against the published `ynotes.schema.json`, so
 # the stable, versioned agent contract (invariant #7) cannot drift from the
 # schema file undetected. Test-only; never linked into the shipped binary.

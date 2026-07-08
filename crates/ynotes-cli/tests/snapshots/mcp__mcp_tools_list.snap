@@ -1,0 +1,189 @@
+---
+source: crates/ynotes-cli/tests/mcp.rs
+expression: tools
+---
+{
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Delete a note by id. Use when a note is wrong, obsolete, or noise. To correct a note, prefer remember at the same location (it supersedes). dry_run previews. A corrupt/unreadable record is removable only by its exact 64-character id.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dry_run": {
+            "description": "Preview without deleting.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Full 64-char note id, or an unambiguous hex prefix of >= 4 characters\n(recall/notes results carry full ids).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "forget"
+    },
+    {
+      "annotations": {
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Browse the note store: one note by id, search bodies by substring, or list every note with its current anchor status. For notes on a specific file or region use recall. count: true gives a store-wide status breakdown. Returns {\"store\":\"absent\"} when the repo has no note store.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "body_contains": {
+            "description": "Search note bodies for this substring (case-sensitive).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "description": "Whole-store status breakdown instead of note bodies.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Fetch exactly one note: full id or unambiguous >= 4-char hex prefix.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "name": "notes"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Persist re-anchors for every note that confidently moved: refreshes selectors, follows committed file renames, collapses merge duplicates. Run after work that moved or heavily edited annotated code, or when recall shows drifted notes. Never touches orphaned notes. dry_run previews. Returns {\"store\":\"absent\"} when the repo has no note store.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dry_run": {
+            "description": "Preview the pass without writing anything.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "name": "reanchor"
+    },
+    {
+      "annotations": {
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Return the context notes overlapping a file or line region. Call before editing or reviewing code you did not write this session - code that looks wrong may have a note explaining why it is deliberate. Statuses: anchored (trust it), drifted (region moved or changed - verify against current code), orphaned (region gone - historical only). Notes follow file renames. Returns {\"store\":\"absent\"} when the repo has no note store. Use count: true to cheaply check whether context exists before pulling bodies.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "count": {
+            "description": "Return only the status breakdown (cheap existence check).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "end": {
+            "description": "1-based last line; needs `start`; omit for a single line.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file": {
+            "description": "Path to the file, relative to the repo root or absolute.",
+            "type": "string"
+          },
+          "start": {
+            "description": "1-based first line; omit with `end` for the whole file.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "type": "object"
+      },
+      "name": "recall"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Save a context note anchored to a code region, committed to the repo and shared with the team. Save the why, not the what: constraints, invariants, gotchas, cross-file couplings, rejected approaches. Only save what would surprise a competent reader in three months - never what the code plainly shows. Anchor to the smallest region the context is about (omit start/end for a whole-file note). Saving to the same location supersedes the note there - this is also how you correct one. Creates the note store at the repo root on first use.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "body": {
+            "description": "The context text. Write for a reader who has not seen this session.",
+            "type": "string"
+          },
+          "end": {
+            "description": "1-based last line; needs `start`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file": {
+            "description": "Path to the file the context is about.",
+            "type": "string"
+          },
+          "start": {
+            "description": "1-based first line; omit both bounds for a file-scoped note.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "file",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "remember"
+    }
+  ]
+}

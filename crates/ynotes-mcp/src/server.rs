@@ -11,6 +11,7 @@ use rmcp::{
 use crate::forget::ForgetArgs;
 use crate::instructions::INSTRUCTIONS;
 use crate::notes::NotesArgs;
+use crate::reanchor_tool::ReanchorArgs;
 use crate::recall::RecallArgs;
 use crate::remember::RememberArgs;
 use crate::tools::tool_err;
@@ -86,7 +87,23 @@ impl YnotesServer {
             .await
             .unwrap_or_else(|e| tool_err("engine", format!("task join: {e}")))
     }
-    // The remaining tool lands in a later task: reanchor.
+    /// See spec §5.5 — description text verbatim from the design doc.
+    #[tool(
+        description = "Persist re-anchors for every note that confidently moved: refreshes selectors, follows committed file renames, collapses merge duplicates. Run after work that moved or heavily edited annotated code, or when recall shows drifted notes. Never touches orphaned notes. dry_run previews. Returns {\"store\":\"absent\"} when the repo has no note store.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reanchor(&self, Parameters(args): Parameters<ReanchorArgs>) -> CallToolResult {
+        // The engine is synchronous; run it on the blocking pool so it never
+        // stalls the current-thread runtime driving the stdio transport.
+        tokio::task::spawn_blocking(move || crate::reanchor_tool::run(&args))
+            .await
+            .unwrap_or_else(|e| tool_err("engine", format!("task join: {e}")))
+    }
 }
 
 // `router = self.tool_router` binds the generated `call_tool`/`list_tools`

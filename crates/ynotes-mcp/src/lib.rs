@@ -9,6 +9,7 @@
 mod forget;
 mod instructions;
 mod notes;
+mod reanchor_tool;
 mod recall;
 mod remember;
 mod server;

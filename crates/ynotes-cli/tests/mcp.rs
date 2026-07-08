@@ -311,6 +311,114 @@ fn notes_lists_what_two_remembers_created() {
     );
 }
 
+/// The reviewed contract for the whole tool surface: exactly five tools, their
+/// verbatim descriptions, their annotations, and — critically — no
+/// `outputSchema` key anywhere (ynotes tools answer with a text content block,
+/// never a structured-output schema). Freezing it here means any future change
+/// to a tool's name, description, or annotations is reviewed as a snapshot diff
+/// (invariant #7 for the MCP face) rather than shipped silently.
+#[test]
+fn tools_list_is_the_reviewed_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = mcp_session(dir.path());
+    let mut tools = s.request("tools/list", &serde_json::json!({}));
+    // Sort by name for determinism before snapshotting.
+    tools["tools"]
+        .as_array_mut()
+        .unwrap()
+        .sort_by_key(|t| t["name"].as_str().unwrap().to_owned());
+    insta::assert_json_snapshot!("mcp_tools_list", tools);
+}
+
+/// Validate a tool's text payload against a named `$def` in the published
+/// schema. The MCP tools answer with the *bare* contract payload (no envelope),
+/// so each is checked against its `$defs` sub-schema directly — the second-face
+/// counterpart to the CLI's `schema_conformance` suite, closing invariant #7
+/// (the contract cannot fork silently across the two front-ends).
+fn assert_conforms(def: &str, payload: &serde_json::Value) {
+    let root: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ynotes.schema.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let sub = serde_json::json!({"$ref": format!("#/$defs/{def}"), "$defs": root["$defs"]});
+    let compiled = jsonschema::validator_for(&sub).unwrap();
+    let errors: Vec<String> = compiled
+        .iter_errors(payload)
+        .map(|e| e.to_string())
+        .collect();
+    assert!(errors.is_empty(), "{def} violations: {errors:?}");
+}
+
+/// Parse a `tools/call` result's single text content block as JSON — every
+/// ynotes tool answers with exactly one block carrying the compact payload.
+fn payload_of(result: &serde_json::Value) -> serde_json::Value {
+    let text = result["content"][0]["text"].as_str().expect("text block");
+    serde_json::from_str(text).expect("tool payload is valid JSON")
+}
+
+/// Every tool's real over-the-wire payload conforms to the published schema.
+/// Drives one live session (remember → recall → recall count → notes → notes
+/// count → forget dry-run → reanchor dry-run), then a bare tempdir for the
+/// store-absent shape a read answers in a non-adopting repo.
+#[test]
+fn every_tool_payload_conforms_to_the_published_schema() {
+    // A git root but no store yet: `remember` bootstraps one, then every read
+    // and the maintenance pass are validated against their schema `$def`.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbravo\ncharlie\ndelta\n").unwrap();
+    let mut s = mcp_session(dir.path());
+
+    let saved = s.tool_call(
+        "remember",
+        &serde_json::json!({"file": "f.txt", "start": 2, "end": 3, "body": "load-bearing"}),
+    );
+    assert_conforms("saveData", &payload_of(&saved));
+    let id = payload_of(&saved)["id"]
+        .as_str()
+        .expect("saved id")
+        .to_owned();
+
+    assert_conforms(
+        "queryData",
+        &payload_of(&s.tool_call("recall", &serde_json::json!({"file": "f.txt"}))),
+    );
+    assert_conforms(
+        "queryCountData",
+        &payload_of(&s.tool_call(
+            "recall",
+            &serde_json::json!({"file": "f.txt", "count": true}),
+        )),
+    );
+    assert_conforms(
+        "listData",
+        &payload_of(&s.tool_call("notes", &serde_json::json!({}))),
+    );
+    assert_conforms(
+        "listCountData",
+        &payload_of(&s.tool_call("notes", &serde_json::json!({"count": true}))),
+    );
+    assert_conforms(
+        "deleteData",
+        &payload_of(&s.tool_call("forget", &serde_json::json!({"id": id, "dry_run": true}))),
+    );
+    assert_conforms(
+        "reanchorData",
+        &payload_of(&s.tool_call("reanchor", &serde_json::json!({"dry_run": true}))),
+    );
+
+    // A pure read in a bare tempdir (no store) answers the storeAbsent shape.
+    let bare = tempfile::tempdir().unwrap();
+    let mut b = mcp_session(bare.path());
+    assert_conforms(
+        "storeAbsent",
+        &payload_of(&b.tool_call("notes", &serde_json::json!({}))),
+    );
+}
+
 #[test]
 fn handshake_reports_instructions_and_tools_capability() {
     let dir = tempfile::tempdir().unwrap();
