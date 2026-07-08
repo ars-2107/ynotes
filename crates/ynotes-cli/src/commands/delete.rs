@@ -11,7 +11,7 @@
 use std::io::Write as _;
 
 use serde::Serialize;
-use ynotes::Store;
+use ynotes::{IdMatch, Store};
 
 use super::id::validate_prefix;
 use super::json_envelope;
@@ -54,21 +54,20 @@ fn run_inner(ids: &[String], dry_run: bool, json: bool) -> Result<(), CommandErr
     let mut not_found: Vec<String> = Vec::new();
 
     for requested in ids {
-        let matches = store.find_by_id_prefix(requested)?;
-        match matches.as_slice() {
+        match store.match_id_prefix(requested)? {
             // No *readable* match. The one removable corrupt case is an exact
             // id naming an unreadable record on disk: `purge_unreadable` is
             // guarded to the exact id (a prefix names no record file) and
             // refuses a readable note, so this never bypasses the preview path
             // above. Anything else stays `not_found`.
-            [] => {
+            IdMatch::None => {
                 if store.purge_unreadable(requested, dry_run)? {
                     deleted_unreadable.push(requested.clone());
                 } else {
                     not_found.push(requested.clone());
                 }
             }
-            [only] => {
+            IdMatch::One(only) => {
                 let view = DeletedView {
                     requested: requested.clone(),
                     id: only.id.clone(),
@@ -81,11 +80,11 @@ fn run_inner(ids: &[String], dry_run: bool, json: bool) -> Result<(), CommandErr
                     body_excerpt: body_excerpt(&only.body),
                 };
                 if !dry_run {
-                    store.remove(only)?;
+                    store.remove(&only)?;
                 }
                 deleted.push(view);
             }
-            many => ambiguous.push(AmbiguousView {
+            IdMatch::Ambiguous(many) => ambiguous.push(AmbiguousView {
                 requested: requested.clone(),
                 candidates: many.iter().map(|n| n.id.clone()).collect(),
             }),

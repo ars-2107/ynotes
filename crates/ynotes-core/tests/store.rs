@@ -2,7 +2,7 @@
 //! capture -> save -> reload round-trip, and store discovery works via both
 //! the upward walk and the `$YNOTES_DIR` override.
 
-use ynotes::{LineRange, Note, Scope, SelectorBundle, SourceFile, Store};
+use ynotes::{IdMatch, LineRange, Note, Scope, SelectorBundle, SourceFile, Store};
 
 /// Builds a note describing lines 2..=3 of a small file with the given body.
 ///
@@ -215,6 +215,51 @@ fn relativize_resolves_a_symlinked_work_tree_root() {
         .expect("/private/tmp spelling");
     assert_eq!(a, b, "`/tmp` and `/private/tmp` spellings must collapse");
     assert_eq!(a, "sub/file.txt");
+}
+
+/// `match_id_prefix` collapses the raw prefix scan into the three outcomes the
+/// by-id commands branch on: a unique hit, an ambiguous prefix, and no match.
+/// Two notes differing only in body carry distinct content-hash ids, so a full
+/// id selects exactly one, the empty prefix (which every id starts with) is
+/// ambiguous across both, and a hex string matching neither resolves to
+/// `None` — the same 0/1/many a front-end renders as proceed / "ambiguous" /
+/// "no match".
+#[test]
+fn match_id_prefix_distinguishes_one_ambiguous_none() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::init(dir.path()).expect("init");
+
+    let first = note_with_body("the first take on this region");
+    let second = note_with_body("a revised take on the same region");
+    assert_ne!(first.id, second.id, "different bodies ⇒ different ids");
+    store.save(&first).expect("save first");
+    store.save(&second).expect("save second");
+
+    // A full id is unique to its own note.
+    match store.match_id_prefix(&first.id).expect("match full id") {
+        IdMatch::One(note) => assert_eq!(note.id, first.id),
+        other => panic!("expected One, got {other:?}"),
+    }
+
+    // Every id starts with the empty prefix, so it matches both notes.
+    match store.match_id_prefix("").expect("match empty prefix") {
+        IdMatch::Ambiguous(candidates) => {
+            let got: std::collections::BTreeSet<String> =
+                candidates.iter().map(|n| n.id.clone()).collect();
+            let want: std::collections::BTreeSet<String> =
+                [first.id.clone(), second.id.clone()].into_iter().collect();
+            assert_eq!(got, want, "both notes are candidates");
+        }
+        other => panic!("expected Ambiguous, got {other:?}"),
+    }
+
+    // A 64-hex string that is not a stored id (all-`f` cannot collide with a
+    // real SHA-256 of the fixtures) matches nothing.
+    let absent = "f".repeat(64);
+    assert!(matches!(
+        store.match_id_prefix(&absent).expect("match absent"),
+        IdMatch::None
+    ));
 }
 
 #[test]

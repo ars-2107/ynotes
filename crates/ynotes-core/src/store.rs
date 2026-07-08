@@ -128,6 +128,33 @@ pub struct NoteScan {
     pub malformed: Vec<MalformedNote>,
 }
 
+/// The outcome of resolving an id or hex prefix to a note via
+/// [`Store::match_id_prefix`].
+///
+/// The three cases a by-id selection lands in, surfaced as data so each
+/// front-end decides how to present them: the CLI turns [`IdMatch::Ambiguous`]
+/// and [`IdMatch::None`] into usage errors, while a server might return them
+/// structurally. Keeping them out of [`Error`] is what lets a resolve stay a
+/// pure lookup — only a genuine store failure is an error.
+///
+/// The [`IdMatch::One`] variant carries a whole [`Note`] inline rather than a
+/// `Box`, so the enum is as large as a note. That is deliberate: this is a
+/// transient, single-value return (never held in bulk), and the shape is a
+/// fixed cross-crate contract every front-end matches on — indirection would
+/// buy nothing but a heap hop and an awkward `Box` at every call site.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum IdMatch {
+    /// Exactly one note matched the prefix.
+    One(Note),
+    /// More than one note matched; every candidate is carried (ascending id
+    /// order, as [`Store::find_by_id_prefix`] returns) so the caller can list
+    /// them.
+    Ambiguous(Vec<Note>),
+    /// No note matched the prefix.
+    None,
+}
+
 /// A handle to an opened store, identified by its `.ynotes` directory.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -366,6 +393,62 @@ impl Store {
         }
     }
 
+    /// Refuse a *symlink* whose canonical target lives outside this store's
+    /// work tree — the write-path mirror of `reanchor`'s in-engine
+    /// canonicalisation guard.
+    ///
+    /// The lexical [`Store::relativize`] catches a path *spelled* outside the
+    /// work tree, but it deliberately works for files that do not yet exist and
+    /// so cannot follow symlinks: a path whose name lives inside the store but
+    /// whose symlink target points elsewhere therefore passes it. This closes
+    /// that gap — and *only* that gap — by canonicalising both sides when the
+    /// path is a symlink, so the resolved contents of an escaping link are never
+    /// read into a note's selector bundle (which, on a committed `.ynotes`,
+    /// would leak whatever the saver's filesystem put behind the link).
+    ///
+    /// Scope is deliberately narrow. A non-symlink path falls through here even
+    /// if it sits outside the work tree, because [`Store::relativize`] is the
+    /// authoritative outside-the-store check for ordinary paths — it produces a
+    /// single, accurate [`Error::OutsideStore`] for every non-symlink case
+    /// (absolute outside paths, devices like `/dev/null`, paths that do not
+    /// exist yet). Blaming those on a symlink that is not there would be a
+    /// misleading message.
+    ///
+    /// A no-op when `file` does not exist on disk (no metadata to read): the
+    /// caller then fails further down with a clearer missing-file error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SymlinkEscape`] if `file` is a symlink resolving outside
+    /// the work tree, or [`Error::Invalid`] if the store has no work tree.
+    pub fn reject_symlink_escape(&self, file: &Path) -> Result<()> {
+        // `symlink_metadata`, not `metadata`: we want the link itself, not what
+        // it points at. A missing file is silently ignored — the lexical check
+        // and the subsequent read will produce the right diagnostic.
+        let Ok(meta) = file.symlink_metadata() else {
+            return Ok(());
+        };
+        if !meta.file_type().is_symlink() {
+            return Ok(());
+        }
+
+        let workdir = self.workdir()?;
+        let Ok(canon_file) = file.canonicalize() else {
+            return Ok(());
+        };
+        let Ok(canon_work) = workdir.canonicalize() else {
+            return Ok(());
+        };
+        if canon_file.strip_prefix(&canon_work).is_err() {
+            return Err(Error::SymlinkEscape {
+                path: file.to_path_buf(),
+                workdir: canon_work,
+                resolved: canon_file,
+            });
+        }
+        Ok(())
+    }
+
     /// Persists `note`, then indexes it under its target path.
     ///
     /// **Idempotent.** The id is content-addressed, so saving identical
@@ -580,6 +663,42 @@ impl Store {
         }
         matches.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(matches)
+    }
+
+    /// Resolve an id or hex `prefix` to the single note it selects, reporting
+    /// ambiguity and absence as data rather than errors.
+    ///
+    /// The selection primitive the by-id commands (`show`, `update`, `delete`)
+    /// share: it runs [`Store::find_by_id_prefix`] and collapses the result
+    /// into [`IdMatch`] — [`IdMatch::One`] for a unique hit,
+    /// [`IdMatch::Ambiguous`] carrying every candidate when the prefix is not
+    /// unique, and [`IdMatch::None`] when nothing matches. Each front-end
+    /// renders those three outcomes in its own words (a usage error for the
+    /// CLI, a structured result for a server), so the classification stays a
+    /// presentation choice and only a genuine store failure is an `Err`.
+    ///
+    /// Whether `prefix` is well-formed (long enough, hex) is a front-end input
+    /// guard, not decided here: a caller that skipped it simply gets the same
+    /// One/Ambiguous/None answer for whatever string it passed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::IndexMalformed`]/[`Error::IndexMissing`] if the index
+    /// itself is unreadable, or [`Error::Io`] if it cannot be read for a reason
+    /// other than absence. A malformed *note* is skipped (see
+    /// [`Store::find_by_id_prefix`]), never an error.
+    pub fn match_id_prefix(&self, prefix: &str) -> Result<IdMatch> {
+        let mut matches = self.find_by_id_prefix(prefix)?;
+        Ok(match matches.pop() {
+            None => IdMatch::None,
+            Some(only) if matches.is_empty() => IdMatch::One(only),
+            Some(last) => {
+                // More than one match: restore the popped id (it sorts last, so
+                // pushing it back keeps the ascending candidate order intact).
+                matches.push(last);
+                IdMatch::Ambiguous(matches)
+            }
+        })
     }
 
     /// Removes a note: de-indexes it, then deletes its record. Used by

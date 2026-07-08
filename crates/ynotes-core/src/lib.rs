@@ -50,13 +50,15 @@ pub use anchor::{AnchorStatus, Resolution, Rung, RungOutcome, RungResult, resolv
 pub use error::{Error, Result};
 pub use git::{GitContext, git_version};
 pub use note::{Note, Scope};
-pub use query::{LineSpec, ListResult, QueryResult, ResolvedNote, list, lookup, query};
+pub use query::{
+    LineSpec, ListResult, QueryResult, ResolvedNote, list, lookup, query, resolve_scope,
+};
 pub use reanchor::{
     ReanchorChange, ReanchorRelocation, ReanchorReport, ReanchorSkip, ReanchorSkipReason, reanchor,
 };
 pub use selector::{GitSelector, SCHEMA, SelectorBundle};
 pub use source::{LineRange, SourceFile};
-pub use store::{IndexHealth, MalformedNote, NoteScan, ReindexReport, Store, StoreHealth};
+pub use store::{IdMatch, IndexHealth, MalformedNote, NoteScan, ReindexReport, Store, StoreHealth};
 pub use structural::{Language, PathStep, StructuralSelector, capture as structural_capture};
 
 /// Returns the compiled version of ynotes.

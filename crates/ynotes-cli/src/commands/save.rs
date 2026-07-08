@@ -9,7 +9,7 @@ use std::path::Path;
 use std::str::FromStr as _;
 
 use serde::Serialize;
-use ynotes::{LineRange, LineSpec, Note, Scope, SelectorBundle, SourceFile, Store};
+use ynotes::{LineSpec, Note, Scope, SelectorBundle, SourceFile, Store, resolve_scope};
 
 use super::json_envelope;
 use super::safety::reject_if_escapes_workdir;
@@ -125,41 +125,6 @@ fn run_inner(
         )?;
     }
     Ok(())
-}
-
-/// Maps the parsed location to a scope and the range to capture. A file note
-/// captures the whole file; an empty file cannot be noted.
-///
-/// A range that runs past the last line is rejected as a [`CommandError::Usage`]
-/// (exit `2`), the same class as line `0`: both are bad locations the user
-/// asked for, not runtime failures. Without this check, a beyond-EOF range
-/// would only fail later inside the engine and exit `1` — inconsistent.
-fn resolve_scope(spec: LineSpec, source: &SourceFile) -> Result<(Scope, LineRange), CommandError> {
-    let usage = |m: String| CommandError::Usage(m);
-    let (scope, range) = match spec {
-        LineSpec::Whole => {
-            let n = source.line_count();
-            if n == 0 {
-                return Err(usage("cannot save a note for an empty file".into()));
-            }
-            let r = LineRange::new(1, n).map_err(|e| usage(e.to_string()))?;
-            (Scope::File, r)
-        }
-        LineSpec::Line(n) => {
-            let r = LineRange::new(n, n).map_err(|e| usage(e.to_string()))?;
-            (Scope::Line, r)
-        }
-        LineSpec::Range(r) => (Scope::Range, r),
-    };
-
-    let lines = source.line_count();
-    if range.end() > lines {
-        return Err(usage(format!(
-            "line {} is past the end of the file ({lines} lines)",
-            range.end()
-        )));
-    }
-    Ok((scope, range))
 }
 
 /// Reads the whole of stdin as the note body.

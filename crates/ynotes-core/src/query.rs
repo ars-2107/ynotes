@@ -80,6 +80,51 @@ fn parse_line(tok: &str) -> Result<u32> {
     }
 }
 
+/// Maps a parsed location [`LineSpec`] to its scope and the [`LineRange`] to
+/// capture, validated against `source`. A file note (`LineSpec::Whole`)
+/// captures the whole file; a line or range captures exactly what it names.
+///
+/// The shared write-path helper behind `save`: it is where a location a caller
+/// asked for is turned into the region a note is anchored to. A range running
+/// past the last line is rejected as [`Error::InvalidLocation`] — the same
+/// usage class as line `0` — because both are bad locations the caller chose,
+/// not runtime failures. Without this check a beyond-EOF range would only fail
+/// deeper in the engine and read as a runtime error, inconsistent with the
+/// line-`0` case a front-end already surfaces as usage.
+///
+/// # Errors
+///
+/// [`Error::InvalidLocation`] if `spec` is [`LineSpec::Whole`] over an empty
+/// file, or names a line past the end of `source`.
+pub fn resolve_scope(spec: LineSpec, source: &SourceFile) -> Result<(Scope, LineRange)> {
+    let (scope, range) = match spec {
+        LineSpec::Whole => {
+            let n = source.line_count();
+            if n == 0 {
+                return Err(Error::InvalidLocation(
+                    "cannot save a note for an empty file".to_owned(),
+                ));
+            }
+            let r = LineRange::new(1, n).map_err(|e| Error::InvalidLocation(e.to_string()))?;
+            (Scope::File, r)
+        }
+        LineSpec::Line(n) => {
+            let r = LineRange::new(n, n).map_err(|e| Error::InvalidLocation(e.to_string()))?;
+            (Scope::Line, r)
+        }
+        LineSpec::Range(r) => (Scope::Range, r),
+    };
+
+    let lines = source.line_count();
+    if range.end() > lines {
+        return Err(Error::InvalidLocation(format!(
+            "line {} is past the end of the file ({lines} lines)",
+            range.end()
+        )));
+    }
+    Ok((scope, range))
+}
+
 /// A note paired with where (and how confidently) it resolved.
 #[derive(Debug, Clone)]
 pub struct ResolvedNote {

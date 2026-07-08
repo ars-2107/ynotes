@@ -4,7 +4,7 @@
 //! One module owns [`MIN_PREFIX`] and [`validate_prefix`] so the two
 //! subcommands cannot drift on what counts as a well-formed id.
 
-use ynotes::{Note, Store};
+use ynotes::{IdMatch, Note, Store};
 
 use crate::command_error::CommandError;
 
@@ -41,25 +41,29 @@ pub(super) fn validate_prefix(id: &str) -> Result<(), CommandError> {
 /// mistake to fix. Shared by `update` and `show` so the two cannot drift on
 /// how a prefix is resolved or how ambiguity is reported.
 ///
+/// Presentation over [`ynotes::Store::match_id_prefix`]: the engine returns the
+/// One/Ambiguous/None outcome as data, and this turns the two non-unique cases
+/// into the CLI's usage messages.
+///
 /// # Errors
 ///
 /// [`CommandError::Usage`] when the prefix matches no note or more than one;
 /// [`CommandError::Engine`] if the store index or a note record cannot be read.
 pub(super) fn resolve_unique(store: &Store, id: &str) -> Result<Note, CommandError> {
-    let matches = store.find_by_id_prefix(id)?;
-    match matches.len() {
-        0 => Err(CommandError::Usage(format!(
+    match store.match_id_prefix(id)? {
+        IdMatch::One(note) => Ok(note),
+        IdMatch::None => Err(CommandError::Usage(format!(
             "no note matches `{id}` (use `yn list` to see available ids)"
         ))),
-        1 => Ok(matches.into_iter().next().expect("len == 1")),
-        n => {
-            let candidates: Vec<String> = matches
+        IdMatch::Ambiguous(candidates) => {
+            let n = candidates.len();
+            let listed: Vec<String> = candidates
                 .iter()
                 .map(|m| m.id.chars().take(16).collect::<String>())
                 .collect();
             Err(CommandError::Usage(format!(
                 "`{id}` is ambiguous — {n} candidates: {}",
-                candidates.join(", ")
+                listed.join(", ")
             )))
         }
     }

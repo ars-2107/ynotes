@@ -90,6 +90,27 @@ pub enum Error {
         store_root: PathBuf,
     },
 
+    /// A user-supplied location (line/range) is invalid for the target file —
+    /// line 0, an inverted range, or a range past EOF. Front-ends map this to
+    /// their usage class (the CLI exits `2`): the user pointed at the wrong
+    /// place, nothing failed at runtime.
+    #[error("{0}")]
+    InvalidLocation(String),
+
+    /// A *symlink* whose canonical target lives outside the store's work tree.
+    /// Kept distinct from [`Error::OutsideStore`] so the message can name the
+    /// symlink resolution; both are usage-class for a front-end.
+    #[error("`{}` is a symlink whose target escapes the work tree at `{}` (resolves to `{}`)",
+        path.display(), workdir.display(), resolved.display())]
+    SymlinkEscape {
+        /// The symlink the caller supplied.
+        path: PathBuf,
+        /// The work tree the target was expected to sit beneath.
+        workdir: PathBuf,
+        /// Where the symlink actually resolves.
+        resolved: PathBuf,
+    },
+
     /// The by-path index was readable but parseable in neither the current
     /// (JSONL) nor the legacy (single-object) format — typically a merge that
     /// mangled the cache. The index is rebuildable, so the remedy is carried in

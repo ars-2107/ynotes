@@ -68,14 +68,17 @@ pub(crate) enum CommandError {
 }
 
 /// Classifies an engine error: most fall through to [`CommandError::Engine`]
-/// (exit `1`), but a few user-input failures the engine exposes — currently
-/// [`ynotes::Error::OutsideStore`] — surface as [`CommandError::Usage`]
+/// (exit `1`), but the user-input failures the engine exposes —
+/// [`ynotes::Error::OutsideStore`], [`ynotes::Error::InvalidLocation`], and
+/// [`ynotes::Error::SymlinkEscape`] — surface as [`CommandError::Usage`]
 /// (exit `2`). This is the single place that decision is made, so a fresh
 /// engine call only needs `?` to get the right classification.
 impl From<ynotes::Error> for CommandError {
     fn from(e: ynotes::Error) -> Self {
         match e {
-            ynotes::Error::OutsideStore { .. } => CommandError::Usage(e.to_string()),
+            ynotes::Error::OutsideStore { .. }
+            | ynotes::Error::InvalidLocation(_)
+            | ynotes::Error::SymlinkEscape { .. } => CommandError::Usage(e.to_string()),
             other => CommandError::Engine(other),
         }
     }
