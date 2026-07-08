@@ -420,7 +420,8 @@ impl Store {
     /// # Errors
     ///
     /// Returns [`Error::SymlinkEscape`] if `file` is a symlink resolving outside
-    /// the work tree, or [`Error::Invalid`] if the store has no work tree.
+    /// the work tree, or propagates [`Store::workdir`]'s [`Error::Invalid`] if
+    /// the store has no work tree.
     pub fn reject_symlink_escape(&self, file: &Path) -> Result<()> {
         // `symlink_metadata`, not `metadata`: we want the link itself, not what
         // it points at. A missing file is silently ignored — the lexical check
@@ -616,9 +617,11 @@ impl Store {
     }
 
     /// Every note whose id starts with `prefix` (case-sensitive hex), in
-    /// ascending id order. The selection key for `delete` and `update`:
-    /// returns 0/1/many so the caller can render the right diagnostic
-    /// ("no match", "ambiguous — N candidates", or proceed).
+    /// ascending id order — the lower-level scan primitive. Most callers want
+    /// [`Store::match_id_prefix`], which collapses the 0/1/many result into
+    /// [`IdMatch`] (pair it with [`crate::validate_id_prefix`] for the
+    /// well-formedness policy); reach for this directly only when the raw
+    /// match list itself is the point.
     ///
     /// A record the index points at that no longer resolves to a file on disk,
     /// or that cannot be read or parsed, is skipped with a `tracing::warn!`,
@@ -677,9 +680,11 @@ impl Store {
     /// CLI, a structured result for a server), so the classification stays a
     /// presentation choice and only a genuine store failure is an `Err`.
     ///
-    /// Whether `prefix` is well-formed (long enough, hex) is a front-end input
-    /// guard, not decided here: a caller that skipped it simply gets the same
-    /// One/Ambiguous/None answer for whatever string it passed.
+    /// Whether `prefix` is well-formed (long enough, hex) is
+    /// [`crate::validate_id_prefix`]'s job, deliberately a separate step: this
+    /// matcher stays a pure lookup, and a caller that skipped validation
+    /// simply gets the same One/Ambiguous/None answer for whatever string it
+    /// passed.
     ///
     /// # Errors
     ///
@@ -1308,6 +1313,39 @@ impl Store {
         let _unlocked = FileExt::unlock(&file);
         result
     }
+}
+
+/// Smallest accepted id prefix. Four hex characters distinguish 65,536 ids —
+/// enough headroom for ergonomic short forms while keeping a stray single
+/// character (`yn delete a`) from accidentally matching anything.
+const MIN_PREFIX: usize = 4;
+
+/// Reject a malformed note-id prefix (non-hex or shorter than four
+/// characters) up front, so a caller mistake surfaces as a usage-class error
+/// rather than a runtime "not found".
+///
+/// The well-formedness policy every front-end shares, engine-owned so two
+/// front-ends cannot drift on what counts as a valid selector. Deliberately
+/// separate from [`Store::match_id_prefix`]: validation is an input check on
+/// the caller's string, matching is a pure lookup — a front-end calls this
+/// first, then matches.
+///
+/// # Errors
+///
+/// [`Error::InvalidIdPrefix`] if `prefix` is shorter than four characters or
+/// contains a non-hex character.
+pub fn validate_id_prefix(prefix: &str) -> Result<()> {
+    if prefix.len() < MIN_PREFIX {
+        return Err(Error::InvalidIdPrefix(format!(
+            "`{prefix}` is too short: id prefixes must be at least {MIN_PREFIX} hex characters"
+        )));
+    }
+    if !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::InvalidIdPrefix(format!(
+            "`{prefix}` is not a valid note id (expected lowercase hex)"
+        )));
+    }
+    Ok(())
 }
 
 /// Rejects an index whose entries point at a value that is not a note id as

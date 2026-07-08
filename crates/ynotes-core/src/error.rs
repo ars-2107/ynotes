@@ -97,6 +97,15 @@ pub enum Error {
     #[error("{0}")]
     InvalidLocation(String),
 
+    /// A user-supplied note-id prefix is malformed — shorter than the minimum
+    /// [`crate::validate_id_prefix`] accepts, or not hexadecimal. Front-ends
+    /// map this to their usage class (the CLI exits `2`): the caller typed a
+    /// selector that cannot name any note, which is a call-site mistake, not a
+    /// runtime failure. Kept distinct from [`Error::InvalidLocation`] (the
+    /// line/range family) so a front-end can react to each independently.
+    #[error("{0}")]
+    InvalidIdPrefix(String),
+
     /// A *symlink* whose canonical target lives outside the store's work tree.
     /// Kept distinct from [`Error::OutsideStore`] so the message can name the
     /// symlink resolution; both are usage-class for a front-end.

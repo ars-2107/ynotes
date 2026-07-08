@@ -1,38 +1,31 @@
-//! Shared note-id parsing for the commands that select a note by id or by
-//! hex prefix (`delete`, `update`).
+//! Shared note-id selection for the commands that pick a note by id or by
+//! hex prefix (`delete`, `update`, `show`).
 //!
-//! One module owns [`MIN_PREFIX`] and [`validate_prefix`] so the two
-//! subcommands cannot drift on what counts as a well-formed id.
+//! The policy itself — what counts as a well-formed prefix, and the
+//! One/Ambiguous/None resolution — is engine-owned
+//! ([`ynotes::validate_id_prefix`] and [`ynotes::Store::match_id_prefix`]);
+//! this module is the presentational thread onto it, giving the subcommands
+//! one place that maps the engine's answers to the CLI's usage messages so
+//! they cannot drift on wording.
 
 use ynotes::{IdMatch, Note, Store};
 
 use crate::command_error::CommandError;
 
-/// Smallest accepted prefix. Four hex characters distinguish 65,536 ids —
-/// enough headroom for ergonomic short forms while keeping a stray single
-/// character (`yn delete a`) from accidentally matching anything.
-pub(super) const MIN_PREFIX: usize = 4;
-
-/// Reject malformed prefixes (non-hex or shorter than [`MIN_PREFIX`]) up
-/// front, so a user mistake at the call site surfaces as a usage error
-/// (exit `2`) rather than a runtime "not found".
+/// Reject malformed prefixes (non-hex or too short) up front, so a user
+/// mistake at the call site surfaces as a usage error (exit `2`) rather than
+/// a runtime "not found".
+///
+/// Thin presentation over [`ynotes::validate_id_prefix`]: the engine owns the
+/// policy, and the classification in [`crate::command_error`] maps its
+/// [`ynotes::Error::InvalidIdPrefix`] to the usage exit code.
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::Usage`] if `id` is shorter than [`MIN_PREFIX`] or
-/// contains a non-hex character.
+/// Returns [`CommandError::Usage`] if `id` is shorter than the engine's
+/// minimum prefix length or contains a non-hex character.
 pub(super) fn validate_prefix(id: &str) -> Result<(), CommandError> {
-    if id.len() < MIN_PREFIX {
-        return Err(CommandError::Usage(format!(
-            "`{id}` is too short: id prefixes must be at least {MIN_PREFIX} hex characters"
-        )));
-    }
-    if !id.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(CommandError::Usage(format!(
-            "`{id}` is not a valid note id (expected lowercase hex)"
-        )));
-    }
-    Ok(())
+    ynotes::validate_id_prefix(id).map_err(CommandError::from)
 }
 
 /// Resolve `id` (or hex prefix) to exactly one note. Multiple matches and no

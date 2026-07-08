@@ -262,6 +262,25 @@ fn match_id_prefix_distinguishes_one_ambiguous_none() {
     ));
 }
 
+/// The well-formedness policy for an id prefix is engine-owned: a sub-4-char
+/// prefix and a non-hex string are both rejected as
+/// [`ynotes::Error::InvalidIdPrefix`] — a usage-class error every front-end
+/// maps to its own input-error surface — rather than resolving to a misleading
+/// "no match". The matcher itself stays pure (see the empty-prefix probe in
+/// the test above), so validation is an explicit, separate step.
+#[test]
+fn validate_id_prefix_rejects_short_and_non_hex_prefixes() {
+    let err = ynotes::validate_id_prefix("ab").expect_err("sub-4-char prefix");
+    assert!(matches!(err, ynotes::Error::InvalidIdPrefix(_)));
+    assert!(err.to_string().contains("too short"));
+
+    let err = ynotes::validate_id_prefix("abcz").expect_err("non-hex prefix");
+    assert!(matches!(err, ynotes::Error::InvalidIdPrefix(_)));
+    assert!(err.to_string().contains("not a valid note id"));
+
+    ynotes::validate_id_prefix("abcd").expect("4 hex chars is well-formed");
+}
+
 #[test]
 fn save_superseding_is_a_no_op_for_identical_content() {
     let dir = tempfile::tempdir().expect("tempdir");

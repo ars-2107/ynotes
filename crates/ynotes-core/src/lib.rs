@@ -58,7 +58,10 @@ pub use reanchor::{
 };
 pub use selector::{GitSelector, SCHEMA, SelectorBundle};
 pub use source::{LineRange, SourceFile};
-pub use store::{IdMatch, IndexHealth, MalformedNote, NoteScan, ReindexReport, Store, StoreHealth};
+pub use store::{
+    IdMatch, IndexHealth, MalformedNote, NoteScan, ReindexReport, Store, StoreHealth,
+    validate_id_prefix,
+};
 pub use structural::{Language, PathStep, StructuralSelector, capture as structural_capture};
 
 /// Returns the compiled version of ynotes.
