@@ -25,18 +25,18 @@ surfaced `orphaned` — never silently dropped.
 
 ## Layout
 
-One crate, two faces:
+A workspace of three crates — one engine, two front-ends:
 
 ```
-src/lib.rs        the engine — all behaviour lives here (the library)
-src/main.rs       a thin binary: parse args, dispatch, exit code
-src/cli.rs …      binary-only modules (not part of the library)
+crates/ynotes-core   the engine — all behaviour lives here (the library; its
+                     lib target is named `ynotes`, so `use ynotes::…` holds)
+crates/ynotes-cli    the CLI binary: parse args, dispatch, map exit codes
+crates/ynotes-mcp    the MCP stdio server (`ynotes mcp`) — the agent-facing
+                     front-end, and the sole home of async
 ```
 
-A library boundary *inside* one crate keeps the start lean while making the
-eventual extraction into a `ynotes-core`
-crate — the day an MCP server needs the engine too — a mechanical move rather
-than a rewrite. Full rationale in [`AGENTS.md`](AGENTS.md).
+Both front-ends reach the engine through the same library boundary; the engine
+references neither. Full rationale in [`AGENTS.md`](AGENTS.md).
 
 ## Install
 
@@ -104,6 +104,63 @@ onto the renamed file.
 
 ynotes is built to be driven by an LLM coding agent, not just a human.
 
+### As an MCP server
+
+`ynotes mcp` runs the engine as a stdio
+[MCP](https://modelcontextprotocol.io) server, so an agent client calls ynotes
+as native tools instead of shelling out to the CLI. Register it once and the
+client spawns the process per session; it completes the MCP handshake and
+injects the note-keeping loop as the server `instructions`.
+
+Register with your client:
+
+```sh
+claude mcp add ynotes -- ynotes mcp          # Claude Code
+codex mcp add ynotes -- ynotes mcp           # Codex CLI
+```
+
+For any client that reads a generic `mcpServers` map (Cursor's
+`.cursor/mcp.json`, and others):
+
+```json
+{
+  "mcpServers": {
+    "ynotes": {
+      "command": "ynotes",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The server exposes five tools, each returning the same versioned payload as
+the matching `--json` command:
+
+| tool | what it does | mirrors |
+|---|---|---|
+| `recall` | read the notes overlapping a file or line region; `count: true` for a cheap "is there context here?" check | `query` |
+| `remember` | save (or supersede) a note anchored to a region; bootstraps the store at the git root on first use | `save` |
+| `forget` | delete a note by id or unambiguous hex prefix; `dry_run` previews | `delete` |
+| `notes` | browse the store — one note by id, a body-substring search, the whole inventory, or `count: true` for a status breakdown | `list` / `show` / `lookup` |
+| `reanchor` | persist re-anchors for the notes that confidently moved; `dry_run` previews | `reanchor` |
+
+A read tool (`recall`, `notes`) in a repository with no store is a success,
+not an error — it returns `{"store": "absent"}`. The first `remember` creates
+the `.ynotes/` store at the repository root, so no separate `ynotes init` is
+needed.
+
+Drop this into your repository's `AGENTS.md` so an agent knows the store is
+there even before it loads a tool:
+
+```markdown
+## Code context (ynotes)
+This repo carries region-anchored context notes in `.ynotes/`. Before editing
+a file, check for context: use the ynotes MCP tools if available, otherwise
+`ynotes query <file> --json`. After non-trivial work, save the why —
+constraints, gotchas, invariants — via `remember` / `ynotes save`. Statuses:
+anchored = trust, drifted = verify, orphaned = historical.
+```
+
 ### When to reach for it
 
 ynotes pays off on **repeat visits** to a piece of code. Use it when:
@@ -130,7 +187,7 @@ file in a week?* If yes, leave a note. If no, skip.
 ### How to drive it
 
 - **Always use `--json`.** Every JSON output rides inside the same envelope —
-  `{success: true, v: 7, data: …}` on success, `{success: false, v: 7,
+  `{success: true, v: 12, data: …}` on success, `{success: false, v: 12,
   error: …, type: …}` on failure — so a consumer always parses one shape
   and branches on `success`. The schema is versioned, snapshot-locked, and
   published as [`ynotes.schema.json`](ynotes.schema.json) (JSON Schema

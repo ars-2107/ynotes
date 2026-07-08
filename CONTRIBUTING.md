@@ -5,12 +5,14 @@ follow it and your change will pass review on the first pass.
 
 ## Ground rules
 
-1. **Behaviour lives in the library** (`src/lib.rs` and the modules it
-   declares). The binary-only modules (`cli`, `commands`, `logging`,
-   `command_error`) may parse arguments and render results — nothing more. If a
-   non-CLI front-end would need the logic, it belongs in the library. This is
-   the boundary that lets the engine later become its own crate without a
-   rewrite; do not erode it.
+1. **Behaviour lives in the engine crate** (`crates/ynotes-core`, whose lib
+   target is named `ynotes`, so `use ynotes::…` holds everywhere). The
+   front-end crates — `crates/ynotes-cli` (the binary, with its `cli`,
+   `commands`, `logging`, `command_error` modules) and `crates/ynotes-mcp` (the
+   MCP server, the sole home of async) — may parse arguments, speak a protocol,
+   and render results — nothing more. If a front-end would need the logic, it
+   belongs in `ynotes-core`. The crate boundary makes this compiler-enforced;
+   do not erode it.
 2. **No `unsafe`.** The crate forbids it. ynotes has no need for it.
 3. **Never silently drop user data.** Context a user wrote is sacrosanct. A
    failure to anchor it must surface flagged, never discard it. (See the

@@ -20,6 +20,7 @@ with an unlocatable region surfaced `orphaned` rather than dropped.
 just                 # list every task
 just ci              # the gate: fmt(rust+toml) · clippy -D warnings · docs · tests · deny · version-sync
 cargo run -- doctor  # run the binary
+cargo run -- mcp     # run the MCP stdio server (spawned by agent clients; not interactive)
 cargo nextest run --all-features   # tests (doctests: cargo test --doc)
 cargo clippy --all-targets --all-features -- -D warnings
 cargo insta review   # accept changed snapshots after intentional output changes
@@ -30,41 +31,45 @@ merged or committed without it passing.
 
 ## Architecture (and the one rule)
 
-One crate, two faces:
+A workspace of three crates — one engine, two front-ends:
 
 ```
-src/lib.rs          the engine — every behaviour. THIS is the library.
-src/error.rs        the engine's typed error (a library module).
-src/main.rs         a thin binary: parse args, dispatch, map to an exit code.
-src/cli.rs          \
-src/commands/        |  binary-only modules. Compiled into the binary, NOT
-src/logging.rs       |  part of the library — a CLI concern physically cannot
-src/command_error.rs/   reach the engine because the engine never sees them.
+crates/ynotes-core   the engine — every behaviour. THIS is the library; its
+                     lib target keeps the name `ynotes`, so `use ynotes::…`
+                     holds everywhere. `error`, `anchor`, `selector`, `store`
+                     … are its modules.
+crates/ynotes-cli    the CLI binary — parse args, dispatch, map to an exit
+                     code (`cli`, `commands`, `logging`, `command_error`). A
+                     separate crate, so a CLI concern physically cannot reach
+                     the engine.
+crates/ynotes-mcp    the MCP stdio server (`ynotes mcp`) — the agent-facing
+                     front-end. The sole home of async (`tokio`/`rmcp`); it
+                     calls the sync engine via `spawn_blocking`.
 ```
 
-**The rule: behaviour lives in the library (`lib.rs` and the modules it
-declares). Binary-only modules may parse arguments and render results —
-nothing more.** The binary reaches the engine via `use ynotes::…`; the engine
-never references a binary module. One crate is the lean shape; the library
-boundary inside it gives separation without the ceremony, at
-the cost of being discipline-enforced rather than compiler-enforced.
+**The rule: behaviour lives in `ynotes-core` (the library and the modules it
+declares). The front-end crates may parse arguments, speak a protocol, and
+render results — nothing more.** Each front-end reaches the engine via
+`use ynotes::…`; the engine never references a front-end. The crate boundary
+now makes this compiler-enforced, not merely a discipline.
 
 ### Where new work goes
 
-- **Anchoring / selector-ladder engine** → new modules in `lib.rs` (e.g.
-  `anchor`, `selector`, `store`). Never in a binary-only module.
-- **MCP server for agents** → when real, lift `lib.rs` + its modules into a
-  `ynotes-core` crate, make this a workspace, add `ynotes-mcp` /
-  `ynotes-cli` beside it. The boundary already exists, so this is a
-  mechanical move. Do it only when the second front-end exists — not before.
-- **New CLI subcommand** → a variant in `cli.rs::Command`, a module under
-  `commands/`, one arm in `commands::dispatch`. The body calls the engine.
+- **Anchoring / selector-ladder engine** → new modules in `ynotes-core` (e.g.
+  `anchor`, `selector`, `store`). Never in a front-end crate.
+- **New CLI subcommand** → a variant in `ynotes-cli`'s `cli.rs::Command`, a
+  module under `commands/`, one arm in `commands::dispatch`. The body calls the
+  engine.
+- **New MCP tool** → a module in `ynotes-mcp` beside the existing five
+  (`recall`, `remember`, `forget`, `notes`, `reanchor`), registered on the
+  server. It maps parameters to an engine call and emits a payload from the
+  shared `$defs`; it adds no behaviour of its own.
 
 ### Why the engine is synchronous
 
 Filesystem reads and content matching are synchronous. The engine stays sync;
-async (`tokio`) enters only at a future network boundary (the
-MCP crate). Do not pull `tokio` into the library.
+async (`tokio`) enters only in `ynotes-mcp`, which calls the engine via
+`spawn_blocking`. Do not pull `tokio` into `ynotes-core`.
 
 ## Error strategy
 
@@ -106,7 +111,9 @@ constraint, or a citation, keep it. Assume every line is read by many people.
 Changing a flag, subcommand, or user-visible behaviour means updating **all**
 of these in the same change — agents must not leave any stale:
 
-1. `src/cli.rs` — the clap `about`/doc strings and `--help` text.
+1. `crates/ynotes-cli/src/cli.rs` — the clap `about`/doc strings and `--help`
+   text (and, for an MCP tool, its `ynotes-mcp` description and the reviewed
+   `tools/list` snapshot).
 2. `README.md` — usage/examples.
 3. `CHANGELOG.md` — an entry under `[Unreleased]`.
 4. `AGENTS.md` — if a rule, command, or invariant changed.
@@ -116,8 +123,10 @@ of these in the same change — agents must not leave any stale:
 ## Invariants (do not break)
 
 1. No `unsafe`.
-2. No behaviour in binary-only modules; it belongs in the library.
-3. The library stays synchronous.
+2. No behaviour in a front-end crate (`ynotes-cli`, `ynotes-mcp`); it belongs
+   in `ynotes-core`.
+3. **The library (`ynotes-core`) stays synchronous.** Async (`tokio`) enters
+   only in `ynotes-mcp`.
 4. **User-authored context is never silently dropped.** A failed anchor must
    surface flagged, not vanish. This is the product's core promise.
 5. MSRV is 1.85, declared in `Cargo.toml`, `clippy.toml`, and `ci.yml` — keep
@@ -132,10 +141,12 @@ of these in the same change — agents must not leave any stale:
    it is never altered silently. `tests/schema_conformance.rs` validates every
    command's real `--json` output against `ynotes.schema.json`, so a schema that
    drifts from what the binary emits fails CI — the schema cannot rot unnoticed.
+   The MCP tools emit the same payload `$defs`; `tests/mcp.rs` validates them
+   against the same schema file, so the two faces cannot fork.
 8. **A resolve never writes; only `reanchor` does.** `query`/`list` are pure
-   (read-only mounts, concurrent readers, a future read-only MCP server
-   depend on it). `reanchor` is the sole resolve-time write path and refuses
-   to refresh an `orphaned` note — re-anchoring is irreversible.
+   (read-only mounts, concurrent readers, and the read-only MCP tools
+   `recall`/`notes` depend on it). `reanchor` is the sole resolve-time write
+   path and refuses to refresh an `orphaned` note — re-anchoring is irreversible.
 9. **The crate version in `Cargo.toml` is the single source of truth.**
    `package.json` and every `npm/*/package.json` are generated from it by
    `scripts/sync-version.mjs`; the `version-sync` CI job fails on drift. Never
