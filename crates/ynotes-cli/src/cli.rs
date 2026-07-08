@@ -1,0 +1,315 @@
+//! The command-line surface: the argument grammar and nothing else.
+//!
+//! This module only *describes* the CLI with `clap`'s derive API. It performs
+//! no work — parsing yields a [`Cli`] that [`crate::commands`] acts on.
+
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+use clap_complete::Shell;
+
+/// ynotes — store and retrieve code context that survives edits.
+#[derive(Debug, Parser)]
+#[command(name = "ynotes", version, about, long_about = None, propagate_version = true)]
+pub(crate) struct Cli {
+    /// Increase logging verbosity. Repeat for more: `-v` info, `-vv` debug,
+    /// `-vvv` trace. Overridden by the `YNOTES_LOG` env var.
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    pub(crate) verbose: u8,
+
+    /// The subcommand to run.
+    #[command(subcommand)]
+    pub(crate) command: Command,
+}
+
+/// Every ynotes subcommand.
+///
+/// Each variant maps to exactly one module in [`crate::commands`]. Adding a
+/// subcommand is: a variant here, a module there, one arm in
+/// `commands::dispatch`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum Command {
+    /// Create a `.ynotes` store in the current directory.
+    Init,
+
+    /// Save context for a file or a region of it.
+    ///
+    /// The location form chooses the scope: omit it for a file note,
+    /// `230` for a line note, `230:327` for a range note.
+    ///
+    /// ynotes pays off when context will be revisited. Use it to leave
+    /// breadcrumbs for an agent (or human) on a later task; a one-shot read
+    /// likely does not need it. To replace a note's body in place, prefer
+    /// `ynotes update <id>` over a second `save`.
+    ///
+    /// If no store exists yet, the first save bootstraps one at the enclosing
+    /// git repository's root, so adoption needs no separate `ynotes init`. With
+    /// no git repository to anchor it, the save fails and directs you to run
+    /// `ynotes init` explicitly.
+    Save {
+        /// The file the context is about.
+        file: PathBuf,
+
+        /// `LINE` or `START:END`. Omit for a file-scoped note.
+        #[arg(value_name = "LINE|START:END")]
+        at: Option<String>,
+
+        /// The context text. If omitted, it is read from stdin.
+        #[arg(short, long)]
+        message: Option<String>,
+
+        /// Emit the saved note's identity as JSON (for agents/scripts).
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Return the context overlapping a file or region.
+    ///
+    /// `230` returns that line's notes and any range/file note covering it;
+    /// `230:327` returns notes overlapping the range; with no location, every
+    /// note for the file. Orphaned notes are always included. A record that
+    /// cannot be read is surfaced (`--json` `malformed[]`), never a hard
+    /// failure that hides the rest.
+    ///
+    /// If git shows the file was renamed from a path that has notes, those notes
+    /// are surfaced here too — resolved against the current file and flagged
+    /// `relocated_from` (`--json`) so an agent working at the new path finds the
+    /// context without first running `reanchor`. This runs even when the file
+    /// already has notes of its own (results are de-duplicated by id), so a
+    /// fresh note on the renamed path never hides the pre-rename context.
+    Query {
+        /// The file to query.
+        file: PathBuf,
+
+        /// `LINE` or `START:END`. Omit to return every note for the file.
+        #[arg(value_name = "LINE|START:END")]
+        at: Option<String>,
+
+        /// Emit machine-readable JSON instead of the text format.
+        #[arg(long)]
+        json: bool,
+
+        /// Also show each rung's outcome (the agreement vector).
+        #[arg(long)]
+        explain: bool,
+
+        /// Summarise instead of printing bodies: a status breakdown (how many
+        /// anchored / drifted / orphaned) so an agent can cheaply check
+        /// whether there is context here before pulling it. The full,
+        /// rename-aware resolution still runs; only the output is condensed.
+        /// Conflicts with `--explain` (there are no per-rung details to show).
+        #[arg(long, conflicts_with = "explain")]
+        count: bool,
+    },
+
+    /// List every note in the store, with its current anchor status. A record
+    /// that cannot be read is surfaced (`--json` `malformed[]`), never dropped.
+    List {
+        /// Restrict to one file (default: every note in the store).
+        file: Option<PathBuf>,
+
+        /// Emit machine-readable JSON instead of the text format.
+        #[arg(long)]
+        json: bool,
+
+        /// Also show each rung's outcome (the agreement vector) per note.
+        #[arg(long)]
+        explain: bool,
+
+        /// Summarise instead of listing notes: a status breakdown across the
+        /// listed set. Conflicts with `--explain`.
+        #[arg(long, conflicts_with = "explain")]
+        count: bool,
+    },
+
+    /// View a single note by id or hex prefix, resolved against current code.
+    ///
+    /// The one by-id read command: `query` selects by file and line, `list`
+    /// shows the whole store, and this shows exactly one note — its body and
+    /// its current anchor status (`anchored`/`drifted`/`orphaned`), resolved
+    /// against the file as it is now. Identify the note by full id or any
+    /// unambiguous hex prefix of at least 4 characters (`ynotes list --json`
+    /// and `ynotes query --json` carry full ids); an ambiguous prefix is
+    /// refused.
+    ///
+    /// The note resolves against its stored `target`. A note whose file was
+    /// renamed away therefore reads `orphaned` here (its code is not at the old
+    /// path); query the new path, where the rename is followed, to see it
+    /// located.
+    Show {
+        /// Note id, or any unambiguous hex prefix of >= 4 characters.
+        id: String,
+
+        /// Emit machine-readable JSON instead of the text format.
+        #[arg(long)]
+        json: bool,
+
+        /// Also show each rung's outcome (the agreement vector).
+        #[arg(long)]
+        explain: bool,
+    },
+
+    /// Find note(s) by a stable handle and print their current id(s).
+    ///
+    /// A note's id is a content hash over its anchor, so it rotates on every
+    /// `reanchor`/`update` (and on a re-`save` after a commit). To reference a
+    /// note durably (a PR description, a code comment), record the
+    /// `(target, body)` it is about and resolve it back to the live id with
+    /// this command. At least one of `--target`/`--body-contains` is required.
+    Lookup {
+        /// Restrict to a file or directory (store-relative, like `list`).
+        #[arg(long, value_name = "PATH")]
+        target: Option<PathBuf>,
+
+        /// Keep only notes whose body contains this substring (case-sensitive).
+        #[arg(long, value_name = "TEXT")]
+        body_contains: Option<String>,
+
+        /// Emit machine-readable JSON instead of the text format.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Refresh selectors for high-confidence notes.
+    ///
+    /// A read never writes; this is the deliberate, auditable pass that
+    /// persists re-anchors. Low-confidence and orphaned notes are left
+    /// untouched.
+    ///
+    /// This is also where a note durably follows a file rename: when a target
+    /// file is gone but git shows it was renamed *and committed*, and a content
+    /// rung confirms the region at the new path, the note is moved there and
+    /// reported under `relocated[]` (`--json`). A rename where the region was
+    /// deleted is not moved — it is left `orphaned` for a human, never welded
+    /// onto the renamed file. A rename that is only *staged* is deferred, not
+    /// migrated: the destination has no committed baseline yet, so relocating
+    /// there would strip the note's git rung; `query` already surfaces the note
+    /// at the new path meanwhile, and this pass migrates it once the rename is
+    /// committed.
+    ///
+    /// Note: a re-anchored note gets a *new* id (the id is a content hash
+    /// over `(target, scope, bundle, body)`, and the bundle just changed).
+    /// To track a note across reanchors, use `(target, scope, body)` as
+    /// the stable lineage rather than caching the id.
+    ///
+    /// Re-anchoring is also the post-merge dedup pass: two copies of the same
+    /// note that a concurrent merge left behind collapse into one when they
+    /// re-anchor to the same place (identical bundle => identical id).
+    Reanchor {
+        /// Show what would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit machine-readable JSON instead of the text report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Replace an existing note's body in place.
+    ///
+    /// The note's target file, scope, and line range are reused; the
+    /// selector bundle is re-captured against the current file. The new note
+    /// supersedes the old, retiring its content-hash id. Identify the note
+    /// by full id or any unambiguous hex prefix of at least 4 characters
+    /// (`yn list --json` and `yn query --json` carry full ids).
+    Update {
+        /// Note id, or any unambiguous hex prefix of >= 4 characters.
+        id: String,
+
+        /// The new context text. If omitted, it is read from stdin.
+        #[arg(short, long)]
+        message: Option<String>,
+
+        /// Emit the updated note's identity as JSON (for agents/scripts).
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Delete one or more notes from the store, by id or hex prefix.
+    ///
+    /// Prefixes must be at least 4 characters and must uniquely identify a
+    /// single note; an ambiguous prefix is refused (we do not silently
+    /// delete multiple candidates). A prefix that matches nothing is also
+    /// refused. Successful deletions still happen even when other ids in the
+    /// same call fail — the process exits `1` only if anything failed.
+    ///
+    /// A corrupt record that cannot be read (flagged `unreadable` by `query`,
+    /// `list`, and `doctor`) is removable too, but only by its *exact*
+    /// 64-character id — a prefix never purges one, since there is no body to
+    /// preview. Such a purge is reported separately (`deleted_unreadable` under
+    /// `--json`) and is a success: it does not flip the exit code.
+    Delete {
+        /// Note ids (or unambiguous hex prefixes, >= 4 characters).
+        #[arg(required = true, value_name = "ID")]
+        ids: Vec<String>,
+
+        /// Show what would be deleted without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit machine-readable JSON instead of the text report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Remove every orphaned note from the store.
+    ///
+    /// An orphaned note is one no content rung could locate — its code is
+    /// gone or wholly rewritten. ynotes never auto-prunes (an orphan may be
+    /// historically valuable, or its target may be temporarily missing), so
+    /// this is the deliberate cleanup pass.
+    Prune {
+        /// Show what would be removed without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit machine-readable JSON instead of the text report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Rebuild the by-path index from the notes on disk.
+    ///
+    /// The index (`.ynotes/index/by-path.json`) is a cache, not the source of
+    /// truth — the notes under `.ynotes/notes/` are. Run this if the index is
+    /// lost, hand-edited, or out of step with the notes (a query or delete
+    /// that logs "run a reindex" is the signal). It recovers any note on disk
+    /// the index forgot and drops any pointer with no note behind it; it never
+    /// touches the notes themselves, so it cannot lose context.
+    Reindex {
+        /// Show what would be rebuilt without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit machine-readable JSON instead of the text report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Report the environment ynotes resolves against (read-only health
+    /// check): version, platform, `git` availability, the discovered store with
+    /// its note count, and store health — malformed note records, index drift,
+    /// and missing managed `.gitattributes` merge guards. `--json` emits the
+    /// same facts as a machine-readable object.
+    Doctor {
+        /// Emit machine-readable JSON instead of the text report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Print a shell completion script to stdout.
+    Completions {
+        /// The shell to generate completions for (e.g. `bash`, `zsh`, `fish`).
+        shell: Shell,
+    },
+
+    /// Run the MCP server over stdio.
+    ///
+    /// Spawned by agent clients (Claude Code, Codex, Cursor, …), not run
+    /// interactively: register once with e.g.
+    /// `claude mcp add ynotes -- ynotes mcp`, and the client starts and stops
+    /// the process with each session. Exposes five tools — recall, remember,
+    /// forget, notes, reanchor — returning the same versioned payloads as
+    /// `--json`.
+    Mcp,
+}

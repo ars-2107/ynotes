@@ -1,0 +1,29 @@
+[package]
+name = "ynotes-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "MCP stdio server for ynotes — the agent-facing front-end."
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ynotes-core = { path = "../ynotes-core" }
+# Pin the major: rmcp breaks its Rust API at majors (a v3 is expected for the
+# 2026-07-28 spec revision); Cargo.lock makes upgrades deliberate.
+rmcp = { version = "2", features = ["transport-io"] }
+tokio = { version = "1", features = ["rt", "macros"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# Unit tests build a real on-disk store in a throwaway directory.
+tempfile = "3"

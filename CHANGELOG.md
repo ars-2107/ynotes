@@ -10,6 +10,48 @@ explicitly here.
 ## [Unreleased]
 
 ### Added
+- **`ynotes mcp`**: run ynotes as a stdio [MCP](https://modelcontextprotocol.io)
+  server for agent clients (Claude Code, Codex, Cursor, …). Register it once
+  (e.g. `claude mcp add ynotes -- ynotes mcp`) and the client spawns the process
+  per session; it completes the MCP initialize handshake and injects the loop
+  protocol as the server `instructions`. It exposes five tools, each a stdio
+  mirror of a CLI command returning the same versioned `--json` payload:
+  **`recall`** returns the context notes overlapping a file or line region — a
+  read-only mirror of `query`, with `count: true` for a cheap existence check
+  and a `{"store":"absent"}` success in a repo with no store; **`remember`**
+  saves (or supersedes) a note anchored to a region — a mirror of `save`,
+  content-addressed so a retried call is idempotent, and the only tool that
+  bootstraps the store, creating one at the git root on first use; **`forget`**
+  deletes a note by id (or unambiguous hex prefix) — a mirror of `delete` with a
+  `dry_run` preview, returning the same partitioned `deleteData`; a request that
+  resolves to nothing or to more than one note is surfaced as an error result
+  carrying that partition, never silently dropped, and a corrupt record is
+  removable only by its exact 64-character id; **`notes`** browses the store —
+  one note by id, a case-sensitive body-substring search, or the whole inventory
+  with each note's anchor status, plus `count: true` for a store-wide status
+  breakdown, and a `{"store":"absent"}` success in a repo with no store;
+  **`reanchor`** persists re-anchors for every note that confidently moved — a
+  mirror of the `reanchor` command and the sole resolve-time write path
+  (invariant #8): it refreshes selectors, follows committed file renames, and
+  never touches an orphaned note, with a `dry_run` preview and the same
+  `{"store":"absent"}` success in a repo with no store. The five-tool surface
+  (`forget` `notes` `reanchor` `recall` `remember`) is frozen by a reviewed
+  `tools/list` snapshot so any future change to a tool's name, description, or
+  annotations is a reviewed diff rather than a silent drift, and validated
+  end-to-end: a conformance sweep checks every tool's real over-the-wire payload
+  against the published `ynotes.schema.json`, extending invariant #7's
+  cannot-fork-silently guarantee to the MCP face.
+  The server lives in a new `ynotes-mcp` workspace crate, the sole home of async
+  (`tokio`/`rmcp`); the engine stays synchronous.
+- **First `save` auto-creates the store at the git root.** Running `save` in a
+  git repository with no `.ynotes` yet bootstraps one at the repository root
+  (the enclosing `.git` directory *or* file, so worktrees are handled) and says
+  so on the human confirmation line — adoption no longer costs a separate
+  `ynotes init`. Placement is deterministic (repo root only); with no git root
+  the save still fails and directs you to `ynotes init`. `$YNOTES_DIR` keeps its
+  override precedence and is never a creation site — pointing it at a non-store
+  is refused rather than bootstrapping there. `save --json` reports it as
+  `saveData.store_created` (contract v12, below).
 - **`ynotes show <id>`**: view a single note by full id or unambiguous hex
   prefix (>= 4 chars), resolved against current code — the by-id read that sat
   between `query` (by file/line) and `list` (the whole store). Shows the body
@@ -137,6 +179,18 @@ explicitly here.
   it from an older commit (still correct, marginally more work).
 
 ### Changed
+- `--json` agent contract bumped to `v: 12` (adds `saveData.store_created` — a
+  boolean, `true` only on the `save` that bootstrapped the `.ynotes` store, so
+  an agent learns the first-save auto-init happened on the same call — and adds
+  the `storeAbsent` `$defs` shape a future MCP read tool will emit in a
+  repository with no store; no existing field changed; mirrored in
+  `tests/agent_contract.rs` and `ynotes.schema.json`).
+- **Internal: the crate is now a three-crate workspace** — `crates/ynotes-core`
+  (the engine, its lib target still named `ynotes`, so `use ynotes::…` is
+  unchanged), `crates/ynotes-cli` (the binary), and `crates/ynotes-mcp` (the
+  MCP front-end). The old library boundary inside a single crate is now a crate
+  boundary the compiler enforces. No user-facing change beyond the MCP server
+  and first-save auto-init above; the binary is still a single `ynotes`.
 - `--json` agent contract bumped to `v: 10` (adds the always-present
   `relocated[]` array to `reanchor` and the optional `relocated_from` field to
   the shared resolved-`note` object; no existing field changed; mirrored in

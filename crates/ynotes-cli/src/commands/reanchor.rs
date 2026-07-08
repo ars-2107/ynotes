@@ -1,0 +1,123 @@
+//! `ynotes reanchor` — the deliberate, auditable selector-refresh pass.
+//!
+//! All policy lives in the engine ([`ynotes::reanchor`]); this only renders
+//! the report and chooses the exit-neutral wording for a dry run.
+
+use std::io::Write as _;
+
+use ynotes::Store;
+use ynotes::contract::ReanchorView;
+
+use super::json_envelope;
+use crate::colour::{Colour, paint};
+use crate::command_error::CommandError;
+
+/// Run (or, with `dry_run`, preview) the re-anchor pass.
+///
+/// # Errors
+///
+/// [`CommandError::Engine`] if the store cannot be read or a refreshed note
+/// cannot be written. Under `--json`, any failure is rendered as the
+/// agent-contract failure envelope on stdout and returned as
+/// [`CommandError::Rendered`].
+pub(crate) fn run(dry_run: bool, json: bool) -> Result<(), CommandError> {
+    if json {
+        json_envelope::wrap(|| run_json(dry_run))
+    } else {
+        run_text(dry_run)
+    }
+}
+
+fn run_text(dry_run: bool) -> Result<(), CommandError> {
+    let store = Store::discover().map_err(CommandError::Engine)?;
+    let report = ynotes::reanchor(&store, dry_run).map_err(CommandError::Engine)?;
+
+    let mut out = std::io::stdout().lock();
+    let verb = if report.dry_run {
+        "would re-anchor"
+    } else {
+        "re-anchored"
+    };
+
+    for c in &report.changed {
+        if c.from == c.to {
+            // The note's selectors were refreshed but its line range did not
+            // move: an `X:Y -> X:Y` arrow would read as a confusing no-op, so
+            // state plainly that only the selectors changed.
+            writeln!(
+                out,
+                "{} {} {}:{} (selectors updated, range unchanged)",
+                paint(verb, Colour::Yellow),
+                c.target,
+                c.from.start(),
+                c.from.end(),
+            )?;
+        } else {
+            writeln!(
+                out,
+                "{} {} {}:{} -> {}:{}",
+                paint(verb, Colour::Yellow),
+                c.target,
+                c.from.start(),
+                c.from.end(),
+                c.to.start(),
+                c.to.end(),
+            )?;
+        }
+    }
+    let reloc_verb = if report.dry_run {
+        "would relocate"
+    } else {
+        "relocated"
+    };
+    for r in &report.relocated {
+        writeln!(
+            out,
+            "{} {} -> {} {}:{} -> {}:{}",
+            paint(reloc_verb, Colour::Cyan),
+            r.from_target,
+            r.to_target,
+            r.from.start(),
+            r.from.end(),
+            r.to.start(),
+            r.to.end(),
+        )?;
+    }
+    for s in &report.skipped {
+        writeln!(
+            out,
+            "{} {} ({})",
+            paint("skipped", Colour::Dim),
+            s.target,
+            s.reason.human(),
+        )?;
+    }
+    writeln!(
+        out,
+        "{}",
+        paint(
+            &format!(
+                "{} {}, {} {}, {} skipped, {} already current{}",
+                report.changed.len(),
+                verb,
+                report.relocated.len(),
+                reloc_verb,
+                report.skipped.len(),
+                report.unchanged,
+                if report.dry_run {
+                    " (dry run — nothing written)"
+                } else {
+                    ""
+                },
+            ),
+            Colour::Dim,
+        )
+    )?;
+    Ok(())
+}
+
+fn run_json(dry_run: bool) -> Result<(), CommandError> {
+    let store = Store::discover().map_err(CommandError::Engine)?;
+    let report = ynotes::reanchor(&store, dry_run).map_err(CommandError::Engine)?;
+    json_envelope::print_success(&ReanchorView::from(&report))
+}

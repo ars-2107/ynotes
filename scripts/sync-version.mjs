@@ -17,14 +17,14 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const check = process.argv.includes('--check');
 
-/** The `version` of the `[package]` table in Cargo.toml. */
+/** The `version` of the `[workspace.package]` table in Cargo.toml. */
 function crateVersion() {
   const toml = readFileSync(join(root, 'Cargo.toml'), 'utf8');
-  // Isolate the `[package]` table (up to the next `[table]` header) so a
-  // `version = ` key from a dependency table can never be picked up.
-  const table = toml.split(/^\[/m).find((s) => s.startsWith('package]'));
+  // Isolate the `[workspace.package]` table (up to the next `[table]` header)
+  // so a `version = ` key from a dependency table can never be picked up.
+  const table = toml.split(/^\[/m).find((s) => s.startsWith('workspace.package]'));
   const match = table?.match(/^version = "([^"]+)"/m);
-  if (!match) throw new Error('no [package] version found in Cargo.toml');
+  if (!match) throw new Error('no [workspace.package] version found in Cargo.toml');
   return match[1];
 }
 

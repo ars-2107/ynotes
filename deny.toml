@@ -13,6 +13,10 @@ ignore = []
 multiple-versions = "warn"
 # A wildcard ("*") version requirement is never acceptable in a shipped lockfile.
 wildcards = "deny"
+# Internal workspace crates are depended on by path with no version requirement,
+# which reads as a wildcard. Both members are `publish = false`, so this exempts
+# only those private path links; an external wildcard is still denied.
+allow-wildcard-paths = true
 
 [licenses]
 version = 2
