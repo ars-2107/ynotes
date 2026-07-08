@@ -8,6 +8,7 @@
 
 mod instructions;
 mod recall;
+mod remember;
 mod server;
 mod tools;
 

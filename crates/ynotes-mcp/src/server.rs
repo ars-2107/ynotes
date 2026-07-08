@@ -10,6 +10,7 @@ use rmcp::{
 
 use crate::instructions::INSTRUCTIONS;
 use crate::recall::RecallArgs;
+use crate::remember::RememberArgs;
 use crate::tools::tool_err;
 
 /// One instance serves one stdio client (the spawning agent session).
@@ -38,7 +39,24 @@ impl YnotesServer {
             .await
             .unwrap_or_else(|e| tool_err("engine", format!("task join: {e}")))
     }
-    // Remaining tools land in later tasks: remember, forget, notes, reanchor.
+    /// See spec §5.2 — description text verbatim from the design doc.
+    #[tool(
+        description = "Save a context note anchored to a code region, committed to the repo and shared with the team. Save the why, not the what: constraints, invariants, gotchas, cross-file couplings, rejected approaches. Only save what would surprise a competent reader in three months - never what the code plainly shows. Anchor to the smallest region the context is about (omit start/end for a whole-file note). Saving to the same location supersedes the note there - this is also how you correct one. Creates the note store at the repo root on first use.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn remember(&self, Parameters(args): Parameters<RememberArgs>) -> CallToolResult {
+        // The engine is synchronous; run it on the blocking pool so it never
+        // stalls the current-thread runtime driving the stdio transport.
+        tokio::task::spawn_blocking(move || crate::remember::run(&args))
+            .await
+            .unwrap_or_else(|e| tool_err("engine", format!("task join: {e}")))
+    }
+    // Remaining tools land in later tasks: forget, notes, reanchor.
 }
 
 // `router = self.tool_router` binds the generated `call_tool`/`list_tools`

@@ -189,6 +189,54 @@ fn recall_without_store_is_store_absent_success() {
 }
 
 #[test]
+fn remember_then_recall_round_trips_in_one_session() {
+    // A repo with a git root but no store yet: `remember` must bootstrap one.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbravo\ncharlie\ndelta\n").unwrap();
+    let mut s = mcp_session(dir.path());
+
+    let saved = s.tool_call(
+        "remember",
+        &serde_json::json!({
+            "file": "f.txt",
+            "start": 2,
+            "end": 3,
+            "body": "deliberate: keep the retry loop"
+        }),
+    );
+    assert_ne!(
+        saved["isError"],
+        serde_json::json!(true),
+        "remember errored: {saved}"
+    );
+    let saved_text = saved["content"][0]["text"].as_str().expect("text block");
+    let saved_payload: serde_json::Value = serde_json::from_str(saved_text).unwrap();
+    assert_eq!(
+        saved_payload["store_created"], true,
+        "first save must bootstrap the store"
+    );
+    assert!(
+        dir.path().join(".ynotes").is_dir(),
+        ".ynotes store not created on disk"
+    );
+
+    // Same session: recall must see the note just remembered — the loop closed.
+    let recalled = s.tool_call("recall", &serde_json::json!({"file": "f.txt"}));
+    assert_ne!(
+        recalled["isError"],
+        serde_json::json!(true),
+        "recall errored: {recalled}"
+    );
+    let recalled_text = recalled["content"][0]["text"].as_str().expect("text block");
+    let recalled_payload: serde_json::Value = serde_json::from_str(recalled_text).unwrap();
+    assert_eq!(
+        recalled_payload["notes"][0]["body"],
+        "deliberate: keep the retry loop"
+    );
+}
+
+#[test]
 fn handshake_reports_instructions_and_tools_capability() {
     let dir = tempfile::tempdir().unwrap();
     let s = mcp_session(dir.path());

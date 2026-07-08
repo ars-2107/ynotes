@@ -14,11 +14,14 @@ explicitly here.
   server for agent clients (Claude Code, Codex, Cursor, …). Register it once
   (e.g. `claude mcp add ynotes -- ynotes mcp`) and the client spawns the process
   per session; it completes the MCP initialize handshake and injects the loop
-  protocol as the server `instructions`. The first tool has landed:
+  protocol as the server `instructions`. Two tools have landed so far:
   **`recall`** returns the context notes overlapping a file or line region — a
   read-only mirror of `query`, with `count: true` for a cheap existence check
-  and a `{"store":"absent"}` success in a repo with no store. The remaining
-  tools (`remember`, `forget`, `notes`, `reanchor`) land in following changes.
+  and a `{"store":"absent"}` success in a repo with no store; **`remember`**
+  saves (or supersedes) a note anchored to a region — a mirror of `save`,
+  content-addressed so a retried call is idempotent, and the only tool that
+  bootstraps the store, creating one at the git root on first use. The remaining
+  tools (`forget`, `notes`, `reanchor`) land in following changes.
   The server lives in a new `ynotes-mcp` workspace crate, the sole home of async
   (`tokio`/`rmcp`); the engine stays synchronous.
 - **First `save` auto-creates the store at the git root.** Running `save` in a
