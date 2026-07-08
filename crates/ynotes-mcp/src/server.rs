@@ -8,7 +8,9 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 
+use crate::forget::ForgetArgs;
 use crate::instructions::INSTRUCTIONS;
+use crate::notes::NotesArgs;
 use crate::recall::RecallArgs;
 use crate::remember::RememberArgs;
 use crate::tools::tool_err;
@@ -56,7 +58,35 @@ impl YnotesServer {
             .await
             .unwrap_or_else(|e| tool_err("engine", format!("task join: {e}")))
     }
-    // Remaining tools land in later tasks: forget, notes, reanchor.
+    /// See spec §5.3 — description text verbatim from the design doc.
+    #[tool(
+        description = "Delete a note by id. Use when a note is wrong, obsolete, or noise. To correct a note, prefer remember at the same location (it supersedes). dry_run previews. A corrupt/unreadable record is removable only by its exact 64-character id.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn forget(&self, Parameters(args): Parameters<ForgetArgs>) -> CallToolResult {
+        // The engine is synchronous; run it on the blocking pool so it never
+        // stalls the current-thread runtime driving the stdio transport.
+        tokio::task::spawn_blocking(move || crate::forget::run(&args))
+            .await
+            .unwrap_or_else(|e| tool_err("engine", format!("task join: {e}")))
+    }
+    /// See spec §5.4 — description text verbatim from the design doc.
+    #[tool(
+        description = "Browse the note store: one note by id, search bodies by substring, or list every note with its current anchor status. For notes on a specific file or region use recall. count: true gives a store-wide status breakdown. Returns {\"store\":\"absent\"} when the repo has no note store.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn notes(&self, Parameters(args): Parameters<NotesArgs>) -> CallToolResult {
+        // The engine is synchronous; run it on the blocking pool so it never
+        // stalls the current-thread runtime driving the stdio transport.
+        tokio::task::spawn_blocking(move || crate::notes::run(&args))
+            .await
+            .unwrap_or_else(|e| tool_err("engine", format!("task join: {e}")))
+    }
+    // The remaining tool lands in a later task: reanchor.
 }
 
 // `router = self.tool_router` binds the generated `call_tool`/`list_tools`

@@ -6,7 +6,9 @@
 //! is called via `spawn_blocking`. stdout carries protocol frames only;
 //! diagnostics go to stderr.
 
+mod forget;
 mod instructions;
+mod notes;
 mod recall;
 mod remember;
 mod server;

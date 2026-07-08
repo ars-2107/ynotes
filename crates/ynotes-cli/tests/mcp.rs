@@ -237,6 +237,81 @@ fn remember_then_recall_round_trips_in_one_session() {
 }
 
 #[test]
+fn forget_then_recall_shows_the_note_gone() {
+    // Drive the whole loop over the wire: remember returns the id, forget
+    // removes it, and a follow-up recall must find nothing.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbravo\ncharlie\ndelta\n").unwrap();
+    let mut s = mcp_session(dir.path());
+
+    let saved = s.tool_call(
+        "remember",
+        &serde_json::json!({"file": "f.txt", "start": 2, "end": 3, "body": "temporary note"}),
+    );
+    let saved_text = saved["content"][0]["text"].as_str().expect("text block");
+    let saved_payload: serde_json::Value = serde_json::from_str(saved_text).unwrap();
+    let id = saved_payload["id"].as_str().expect("saved id").to_owned();
+
+    let forgotten = s.tool_call("forget", &serde_json::json!({"id": id}));
+    assert_ne!(
+        forgotten["isError"],
+        serde_json::json!(true),
+        "forget errored: {forgotten}"
+    );
+    let forgotten_text = forgotten["content"][0]["text"]
+        .as_str()
+        .expect("text block");
+    let forgotten_payload: serde_json::Value = serde_json::from_str(forgotten_text).unwrap();
+    assert_eq!(forgotten_payload["deleted"][0]["id"], id);
+
+    let recalled = s.tool_call("recall", &serde_json::json!({"file": "f.txt"}));
+    let recalled_text = recalled["content"][0]["text"].as_str().expect("text block");
+    let recalled_payload: serde_json::Value = serde_json::from_str(recalled_text).unwrap();
+    assert_eq!(
+        recalled_payload["notes"]
+            .as_array()
+            .expect("notes array")
+            .len(),
+        0,
+        "the note should be gone after forget: {recalled_payload}"
+    );
+}
+
+#[test]
+fn notes_lists_what_two_remembers_created() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbravo\ncharlie\ndelta\n").unwrap();
+    let mut s = mcp_session(dir.path());
+
+    s.tool_call(
+        "remember",
+        &serde_json::json!({"file": "f.txt", "start": 1, "end": 1, "body": "note one"}),
+    );
+    s.tool_call(
+        "remember",
+        &serde_json::json!({"file": "f.txt", "start": 3, "end": 4, "body": "note two"}),
+    );
+
+    let listed = s.tool_call("notes", &serde_json::json!({}));
+    assert_ne!(
+        listed["isError"],
+        serde_json::json!(true),
+        "notes errored: {listed}"
+    );
+    let text = listed["content"][0]["text"].as_str().expect("text block");
+    let payload: serde_json::Value = serde_json::from_str(text).unwrap();
+    let notes = payload["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 2, "expected both remembered notes: {payload}");
+    let bodies: Vec<&str> = notes.iter().map(|n| n["body"].as_str().unwrap()).collect();
+    assert!(
+        bodies.contains(&"note one") && bodies.contains(&"note two"),
+        "both bodies should be listed: {bodies:?}"
+    );
+}
+
+#[test]
 fn handshake_reports_instructions_and_tools_capability() {
     let dir = tempfile::tempdir().unwrap();
     let s = mcp_session(dir.path());
