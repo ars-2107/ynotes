@@ -8,7 +8,7 @@ use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::str::FromStr as _;
 
-use serde::Serialize;
+use ynotes::contract::{SaveData, scope_word_json};
 use ynotes::{LineSpec, Note, Scope, SelectorBundle, SourceFile, Store, resolve_scope};
 
 use super::json_envelope;
@@ -86,22 +86,10 @@ fn run_inner(
         .map_err(CommandError::Engine)?;
 
     if json {
-        // A stable identity record for an agent to capture and reference
-        // later. Serialised with `serde_json`, never string interpolation:
-        // the `--json` surface is an agent contract and must stay valid JSON
-        // for any target path (a quote in a filename must be escaped).
-        #[derive(Serialize)]
-        struct SaveData<'a> {
-            id: &'a str,
-            target: &'a str,
-            scope: &'a str,
-            range: [u32; 2],
-            created: bool,
-        }
         json_envelope::print_success(&SaveData {
-            id: &note.id,
-            target: &target,
-            scope: super::render::scope_word_json(scope),
+            id: note.id.clone(),
+            target: target.clone(),
+            scope: scope_word_json(scope).to_owned(),
             range: [range.start(), range.end()],
             created,
         })?;

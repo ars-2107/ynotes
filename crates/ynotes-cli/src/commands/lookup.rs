@@ -9,11 +9,10 @@
 use std::io::Write as _;
 use std::path::Path;
 
-use serde::Serialize;
 use ynotes::Store;
+use ynotes::contract::{LookupData, note_view};
 
 use super::json_envelope;
-use super::render::{NoteView, note_view};
 use crate::colour::{Colour, paint};
 use crate::command_error::CommandError;
 
@@ -40,11 +39,6 @@ pub(crate) fn run(
     } else {
         run_text(target, body_contains)
     }
-}
-
-#[derive(Serialize)]
-struct LookupData {
-    notes: Vec<NoteView>,
 }
 
 fn run_json(target: Option<&Path>, body_contains: Option<&str>) -> Result<(), CommandError> {

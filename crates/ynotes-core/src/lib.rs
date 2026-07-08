@@ -15,6 +15,7 @@
 //!
 //! ## Modules
 //!
+//! - `contract` — the versioned `--json` payload shapes every front-end emits.
 //! - `error` — the single [`Error`] type every fallible operation returns.
 //! - `source` — a file as lines, and the [`LineRange`] primitive.
 //! - `path` — the repo-relative, forward-slash path used as a note's identity.
@@ -35,6 +36,7 @@
 // Declaration order mirrors the layering in the module list above, so the
 // two cannot drift on a rename.
 mod anchor;
+pub mod contract;
 mod error;
 mod git;
 mod note;

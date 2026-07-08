@@ -1,77 +1,18 @@
-//! Shared rendering for `query` and `list`: one note → text or JSON.
+//! Shared *text* rendering for `query` and `list`: one note → a coloured line.
 //!
 //! Presentation only (binary side). The engine hands back a structured
-//! [`ResolvedNote`]; turning it into a coloured line or a stable JSON object
-//! lives here so both commands render identically and the JSON contract has a
-//! single definition.
+//! [`ResolvedNote`]; this turns it into a coloured, human-readable line. The
+//! JSON contract those commands also emit lives in [`ynotes::contract`], so
+//! both faces serialise the same bytes; this module is purely the terminal
+//! form.
 
 use std::io::Write;
 
-use serde::Serialize;
-use ynotes::{AnchorStatus, MalformedNote, ResolvedNote, Rung, RungResult, Scope};
+use ynotes::contract::{CountView, note_view};
+use ynotes::{AnchorStatus, MalformedNote, ResolvedNote};
 
 use crate::colour::{Colour, paint};
 use crate::command_error::CommandError;
-
-/// `[a, b]` for a resolved range, `null` for an orphan.
-type RangePair = Option<[u32; 2]>;
-
-/// One rung's outcome, for `--explain`.
-#[derive(Serialize)]
-pub(crate) struct RungView {
-    rung: &'static str,
-    result: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    range: RangePair,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    score: Option<u8>,
-}
-
-/// The stable per-note JSON object (and the data the text renderer formats).
-#[derive(Serialize)]
-pub(crate) struct NoteView {
-    pub(crate) id: String,
-    pub(crate) target: String,
-    pub(crate) scope: String,
-    pub(crate) status: &'static str,
-    /// Agent convenience: `false` only for an `anchored` note — a pure
-    /// function of `status`, since `drifted` and `orphaned` are both stale.
-    pub(crate) stale: bool,
-    pub(crate) resolved_range: RangePair,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) previous_range: Option<[u32; 2]>,
-    /// Present only when this note surfaced under a file it was renamed *to*:
-    /// the pre-rename path it is still stored under. Omitted otherwise, so the
-    /// default note shape is unchanged. Its presence tells an agent the note
-    /// migrated here and a `reanchor` would make that durable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) relocated_from: Option<String>,
-    pub(crate) body: String,
-    /// Present only with `--explain`; omitted otherwise so the default schema
-    /// is unchanged.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) rungs: Option<Vec<RungView>>,
-}
-
-/// The stable JSON object for a record the index pointed at that could not be
-/// read or parsed. Shared by `query` and `list` so their `malformed[]` arrays
-/// are byte-identical for the same input. `error` is free-form (for display) —
-/// a consumer branches on an entry *existing*, not on its text.
-#[derive(Serialize)]
-pub(crate) struct MalformedView {
-    pub(crate) id: String,
-    pub(crate) target: String,
-    pub(crate) error: String,
-}
-
-/// Maps an engine [`MalformedNote`] to its stable view.
-pub(crate) fn malformed_view(m: &MalformedNote) -> MalformedView {
-    MalformedView {
-        id: m.id.clone(),
-        target: m.target.clone(),
-        error: m.error.clone(),
-    }
-}
 
 /// Writes one malformed-record advisory in the human text format. Flagged in
 /// red and pointing at the remedy, so a corrupt record is loud, not hidden
@@ -97,30 +38,6 @@ pub(crate) fn write_text_malformed(
     )?;
     writeln!(out)?;
     Ok(())
-}
-
-/// Maps a resolved note to its view; includes the rung vector if `explain`.
-pub(crate) fn note_view(rn: &ResolvedNote, explain: bool) -> NoteView {
-    let (status, previous) = match rn.resolution.status {
-        AnchorStatus::Anchored => ("anchored", None),
-        AnchorStatus::Drifted { from } => ("drifted", Some([from.start(), from.end()])),
-        AnchorStatus::Orphaned { last_known } => {
-            ("orphaned", Some([last_known.start(), last_known.end()]))
-        }
-    };
-    let stale = !matches!(rn.resolution.status, AnchorStatus::Anchored);
-    NoteView {
-        id: rn.note.id.clone(),
-        target: rn.note.target.clone(),
-        scope: scope_word_json(rn.note.scope).to_owned(),
-        status,
-        stale,
-        resolved_range: rn.resolution.range.map(|r| [r.start(), r.end()]),
-        previous_range: previous,
-        relocated_from: rn.relocated_from.clone(),
-        body: rn.note.body.clone(),
-        rungs: explain.then(|| rn.resolution.rungs.iter().map(rung_view).collect()),
-    }
 }
 
 /// Writes one note in the human text format, coloured by status.
@@ -203,68 +120,6 @@ pub(crate) fn write_text_note(
     Ok(())
 }
 
-fn rung_view(o: &ynotes::RungOutcome) -> RungView {
-    let rung = match o.rung {
-        Rung::Git => "git",
-        Rung::Structural => "structural",
-        Rung::Quote => "quote",
-        Rung::Fuzzy => "fuzzy",
-        Rung::Position => "position",
-    };
-    match o.result {
-        RungResult::Hit { range, score } => RungView {
-            rung,
-            result: "hit",
-            range: Some([range.start(), range.end()]),
-            score: Some(score),
-        },
-        RungResult::Miss => RungView {
-            rung,
-            result: "miss",
-            range: None,
-            score: None,
-        },
-        RungResult::Skipped => RungView {
-            rung,
-            result: "skipped",
-            range: None,
-            score: None,
-        },
-    }
-}
-
-/// The status breakdown emitted by `--count` summary mode. A pure tally over a
-/// resolved set — the cheap answer an agent reads to decide whether to pull
-/// bodies, without paying the tokens for them. `total` equals
-/// `anchored + drifted + orphaned`.
-#[derive(Serialize)]
-pub(crate) struct CountView {
-    pub(crate) total: u32,
-    pub(crate) anchored: u32,
-    pub(crate) drifted: u32,
-    pub(crate) orphaned: u32,
-}
-
-/// Tally resolved notes by anchor status for `--count`. Shared by `query` and
-/// `list` so the two summarise identically.
-pub(crate) fn count_view<'a>(notes: impl Iterator<Item = &'a ResolvedNote>) -> CountView {
-    let mut c = CountView {
-        total: 0,
-        anchored: 0,
-        drifted: 0,
-        orphaned: 0,
-    };
-    for rn in notes {
-        c.total += 1;
-        match rn.resolution.status {
-            AnchorStatus::Anchored => c.anchored += 1,
-            AnchorStatus::Drifted { .. } => c.drifted += 1,
-            AnchorStatus::Orphaned { .. } => c.orphaned += 1,
-        }
-    }
-    c
-}
-
 /// Render a `--count` summary as human text: one tally line, plus a red
 /// unreadable-records line when the index pointed at records that could not be
 /// read — so a corrupt record is flagged in the summary too, never hidden
@@ -311,20 +166,5 @@ pub(crate) fn body_excerpt(body: &str) -> String {
     } else {
         let truncated: String = first.chars().take(MAX).collect();
         format!("{truncated}…")
-    }
-}
-
-/// JSON-facing scope: collapses `Line` and `Range` to a single `"range"` so
-/// the agent contract carries one representation for a `[start, end]` region.
-/// A consumer that cares about user intent can recover it from `range[0] ==
-/// range[1]`; before v3 we exposed two variants for the same shape, forcing
-/// every caller to branch. The internal [`Scope::Line`] enum stays — note
-/// ids are content-hashed over `(target, scope, bundle, body)` (invariant
-/// #6), so changing the enum would invalidate every existing single-line
-/// note's id; this is presentation-only.
-pub(crate) fn scope_word_json(scope: Scope) -> &'static str {
-    match scope {
-        Scope::Line | Scope::Range => "range",
-        Scope::File => "file",
     }
 }

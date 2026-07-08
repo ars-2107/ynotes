@@ -10,12 +10,12 @@
 
 use std::io::Write as _;
 
-use serde::Serialize;
+use ynotes::contract::{AmbiguousView, DeleteData, DeletedView, scope_word_json};
 use ynotes::{IdMatch, Store};
 
 use super::id::validate_prefix;
 use super::json_envelope;
-use super::render::{body_excerpt, scope_word_json, short_id};
+use super::render::{body_excerpt, short_id};
 use crate::colour::{Colour, paint};
 use crate::command_error::CommandError;
 
@@ -122,42 +122,6 @@ fn run_inner(ids: &[String], dry_run: bool, json: bool) -> Result<(), CommandErr
     } else {
         Ok(())
     }
-}
-
-/// Stable JSON payload for `delete --json`.
-///
-/// `requested` is the count of ids the caller passed; the four category arrays
-/// partition the outcome (each requested id appears in exactly one). Always
-/// emitted in full — empty arrays included — so a consumer never has to branch
-/// on key presence. `deleted_unreadable` (added in `v9`) holds the ids of
-/// *corrupt* records removed by exact id: they cannot be read to supply a
-/// target/scope/body, so they are listed as bare ids rather than as rich
-/// `deleted[]` entries. Unlike `ambiguous`/`not_found`, an entry here is a
-/// success, not a failure, and does not flip the exit code.
-#[derive(Serialize)]
-struct DeleteData {
-    requested: usize,
-    deleted: Vec<DeletedView>,
-    deleted_unreadable: Vec<String>,
-    ambiguous: Vec<AmbiguousView>,
-    not_found: Vec<String>,
-    dry_run: bool,
-}
-
-#[derive(Serialize)]
-struct DeletedView {
-    requested: String,
-    id: String,
-    target: String,
-    scope: &'static str,
-    range: [u32; 2],
-    body_excerpt: String,
-}
-
-#[derive(Serialize)]
-struct AmbiguousView {
-    requested: String,
-    candidates: Vec<String>,
 }
 
 fn write_text(

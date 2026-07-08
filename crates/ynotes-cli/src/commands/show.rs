@@ -8,12 +8,12 @@
 //! `orphaned` here (its code is not at the old path); `query` on the new path is
 //! the rename-aware read.
 
-use serde::Serialize;
+use ynotes::contract::{ShowData, note_view};
 use ynotes::{GitContext, ResolvedNote, SourceFile, Store, resolve};
 
 use super::id::{resolve_unique, validate_prefix};
 use super::json_envelope;
-use super::render::{NoteView, note_view, write_text_note};
+use super::render::write_text_note;
 use crate::command_error::CommandError;
 
 /// Show the note identified by `id` (a full id or unambiguous hex prefix).
@@ -30,15 +30,6 @@ pub(crate) fn run(id: &str, json: bool, explain: bool) -> Result<(), CommandErro
     } else {
         run_text(id, explain)
     }
-}
-
-#[derive(Serialize)]
-struct ShowData {
-    note: NoteView,
-    /// Non-fatal advisories — populated, for example, when the note's target
-    /// file does not exist on disk (the note then resolves `orphaned`). Always
-    /// present; empty when there is nothing to flag.
-    warnings: Vec<String>,
 }
 
 fn run_json(id: &str, explain: bool) -> Result<(), CommandError> {

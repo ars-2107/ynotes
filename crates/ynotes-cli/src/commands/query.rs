@@ -7,14 +7,13 @@
 use std::path::Path;
 use std::str::FromStr as _;
 
-use serde::Serialize;
+use ynotes::contract::{
+    NoteView, QueryCountData, QueryData, QuerySpecView, count_view, malformed_view, note_view,
+};
 use ynotes::{LineSpec, QueryResult, Store};
 
 use super::json_envelope;
-use super::render::{
-    CountView, MalformedView, NoteView, count_view, malformed_view, note_view, write_count_line,
-    write_text_malformed, write_text_note,
-};
+use super::render::{write_count_line, write_text_malformed, write_text_note};
 use crate::command_error::CommandError;
 
 /// Resolve notes for `file` at `at` and print them.
@@ -38,36 +37,6 @@ pub(crate) fn run(
         (false, true) => run_count_text(file, at),
         (false, false) => run_text(file, at, explain),
     }
-}
-
-#[derive(Serialize)]
-struct QueryData<'a> {
-    query: QuerySpecView<'a>,
-    /// Every resolved note this query returns, in a single array — anchored,
-    /// drifted, and orphaned together. Each entry carries `status` so a
-    /// consumer that wants the historical matched/orphaned split groups by
-    /// it (`status == "orphaned"` ⇒ was an orphan; everything else matched
-    /// the queried interval under its scope). Unified in `v=5` so query and
-    /// `list` share one shape, with orphans still always returned (the
-    /// never-drop promise — invariant #4).
-    notes: Vec<NoteView>,
-    /// Records for this file the index pointed at that could not be read or
-    /// parsed. Skipped from `notes` (they cannot be resolved) but surfaced here
-    /// so a corrupt record is never silently dropped from a query (invariant
-    /// #4). Always present; empty when there is nothing to flag.
-    malformed: Vec<MalformedView>,
-    /// Non-fatal advisories — populated, for example, when the target file
-    /// does not exist (almost always a typo, but `exit=0` is the right Unix
-    /// signal for "no match" so the warning lives in-band). Always present,
-    /// empty when there is nothing to flag, so consumers do not have to
-    /// branch on key presence.
-    warnings: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct QuerySpecView<'a> {
-    file: String,
-    at: &'a str,
 }
 
 fn run_json(file: &Path, at: Option<&str>, explain: bool) -> Result<(), CommandError> {
@@ -97,28 +66,13 @@ fn run_json(file: &Path, at: Option<&str>, explain: bool) -> Result<(), CommandE
     let data = QueryData {
         query: QuerySpecView {
             file: file.to_string_lossy().into_owned(),
-            at: at.unwrap_or(""),
+            at: at.unwrap_or("").to_owned(),
         },
         notes,
         malformed: result.malformed.iter().map(malformed_view).collect(),
         warnings,
     };
     json_envelope::print_success(&data)
-}
-
-/// `query --count --json` payload: the status breakdown instead of the note
-/// bodies. Same resolution as [`run_json`] (rename-following included, per the
-/// full-and-correct contract), only the output is condensed — a `count` object
-/// and a `malformed` tally in place of the `notes`/`malformed` arrays.
-#[derive(Serialize)]
-struct QueryCountData<'a> {
-    query: QuerySpecView<'a>,
-    count: CountView,
-    /// How many records the index pointed at could not be read — the count-mode
-    /// analogue of the full payload's `malformed[]`, so an agent in summary mode
-    /// still learns a corrupt record is present (invariant #4).
-    malformed: usize,
-    warnings: Vec<String>,
 }
 
 fn run_count_json(file: &Path, at: Option<&str>) -> Result<(), CommandError> {
@@ -138,7 +92,7 @@ fn run_count_json(file: &Path, at: Option<&str>) -> Result<(), CommandError> {
     let data = QueryCountData {
         query: QuerySpecView {
             file: file.to_string_lossy().into_owned(),
-            at: at.unwrap_or(""),
+            at: at.unwrap_or("").to_owned(),
         },
         count,
         malformed: result.malformed.len(),

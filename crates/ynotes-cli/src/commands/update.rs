@@ -10,11 +10,12 @@ use std::io::{Read as _, Write as _};
 use std::path::Path;
 
 use serde::Serialize;
+use ynotes::contract::scope_word_json;
 use ynotes::{GitContext, SelectorBundle, SourceFile, Store, resolve};
 
 use super::id::{resolve_unique, validate_prefix};
 use super::json_envelope;
-use super::render::{scope_word_json, short_id};
+use super::render::short_id;
 use super::safety::reject_if_escapes_workdir;
 use crate::colour::{Colour, paint};
 use crate::command_error::CommandError;

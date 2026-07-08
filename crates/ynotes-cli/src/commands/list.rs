@@ -4,16 +4,12 @@
 
 use std::path::Path;
 
-use serde::Serialize;
-use ynotes::Store;
+use ynotes::contract::{ListCountData, ListData, count_view, malformed_view, note_view};
+use ynotes::{ResolvedNote, Store};
 
 use super::json_envelope;
-use super::render::{
-    CountView, MalformedView, NoteView, count_view, malformed_view, note_view, write_count_line,
-    write_text_malformed, write_text_note,
-};
+use super::render::{write_count_line, write_text_malformed, write_text_note};
 use crate::command_error::CommandError;
-use ynotes::ResolvedNote;
 
 /// List notes (optionally restricted to `file`).
 ///
@@ -34,21 +30,6 @@ pub(crate) fn run(
         (false, true) => run_count_text(file),
         (false, false) => run_text(file, explain),
     }
-}
-
-#[derive(Serialize)]
-struct ListData {
-    notes: Vec<NoteView>,
-    /// Records the index pointed at that could not be read or parsed. Skipped
-    /// from `notes` (they cannot be resolved) but surfaced here so a corrupt
-    /// record is never silently omitted from an inventory (invariant #4).
-    /// Always present; empty when there is nothing to flag.
-    malformed: Vec<MalformedView>,
-    /// Non-fatal advisories, populated when a filter matched nothing (the
-    /// human form already distinguishes these cases; the array gives a
-    /// machine consumer the same signal). Always present; empty when there is
-    /// nothing to flag.
-    warnings: Vec<String>,
 }
 
 fn run_json(file: Option<&Path>, explain: bool) -> Result<(), CommandError> {
@@ -81,17 +62,6 @@ fn run_text(file: Option<&Path>, explain: bool) -> Result<(), CommandError> {
         }
     }
     Ok(())
-}
-
-/// `list --count --json` payload: the status breakdown across the listed set in
-/// place of the `notes` array. Same resolution as [`run_json`], condensed.
-#[derive(Serialize)]
-struct ListCountData {
-    count: CountView,
-    /// How many records the index pointed at could not be read — the count-mode
-    /// analogue of the full payload's `malformed[]` (invariant #4).
-    malformed: usize,
-    warnings: Vec<String>,
 }
 
 fn run_count_json(file: Option<&Path>) -> Result<(), CommandError> {

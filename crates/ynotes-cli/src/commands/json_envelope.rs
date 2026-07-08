@@ -16,13 +16,9 @@
 use std::io::Write as _;
 
 use serde::Serialize;
+use ynotes::contract::CONTRACT_VERSION;
 
 use crate::command_error::CommandError;
-
-/// The current `--json` contract version. Bumped when any field changes;
-/// mirrored in `tests/agent_contract.rs` and `ynotes.schema.json`
-/// (invariant #7).
-pub(crate) const CONTRACT_VERSION: u8 = 11;
 
 /// The success envelope: `{success: true, v: N, data: <payload>}`. Declared
 /// as a struct (not built with `json!`) so serde preserves the field order

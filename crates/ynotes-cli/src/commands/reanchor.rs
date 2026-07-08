@@ -5,8 +5,8 @@
 
 use std::io::Write as _;
 
-use serde::Serialize;
-use ynotes::{ReanchorReport, Store};
+use ynotes::Store;
+use ynotes::contract::ReanchorView;
 
 use super::json_envelope;
 use crate::colour::{Colour, paint};
@@ -120,90 +120,4 @@ fn run_json(dry_run: bool) -> Result<(), CommandError> {
     let store = Store::discover().map_err(CommandError::Engine)?;
     let report = ynotes::reanchor(&store, dry_run).map_err(CommandError::Engine)?;
     json_envelope::print_success(&ReanchorView::from(&report))
-}
-
-/// JSON projection of [`ReanchorReport`]. Defined locally (not by deriving
-/// `Serialize` on the engine type) so the agent contract stays a deliberate
-/// surface a refactor inside the engine cannot accidentally widen.
-#[derive(Serialize)]
-struct ReanchorView<'a> {
-    dry_run: bool,
-    changed: Vec<ChangedView<'a>>,
-    relocated: Vec<RelocatedView<'a>>,
-    skipped: Vec<SkippedView<'a>>,
-    unchanged: usize,
-}
-
-#[derive(Serialize)]
-struct ChangedView<'a> {
-    target: &'a str,
-    old_id: &'a str,
-    new_id: &'a str,
-    from: [u32; 2],
-    to: [u32; 2],
-}
-
-/// JSON projection of a note moved to a renamed file. Its own partition (not
-/// folded into `changed`) because a relocation changes the note's `target` — a
-/// distinct event a consumer branches on separately.
-#[derive(Serialize)]
-struct RelocatedView<'a> {
-    from_target: &'a str,
-    to_target: &'a str,
-    old_id: &'a str,
-    new_id: &'a str,
-    from: [u32; 2],
-    to: [u32; 2],
-}
-
-#[derive(Serialize)]
-struct SkippedView<'a> {
-    target: &'a str,
-    id: &'a str,
-    /// A stable, lower-kebab-case classification an agent can branch on
-    /// without parsing prose; the human form lives in [`Self::reason`].
-    reason_code: &'static str,
-    reason: &'static str,
-}
-
-impl<'a> From<&'a ReanchorReport> for ReanchorView<'a> {
-    fn from(r: &'a ReanchorReport) -> Self {
-        Self {
-            dry_run: r.dry_run,
-            changed: r
-                .changed
-                .iter()
-                .map(|c| ChangedView {
-                    target: &c.target,
-                    old_id: &c.old_id,
-                    new_id: &c.new_id,
-                    from: [c.from.start(), c.from.end()],
-                    to: [c.to.start(), c.to.end()],
-                })
-                .collect(),
-            relocated: r
-                .relocated
-                .iter()
-                .map(|r| RelocatedView {
-                    from_target: &r.from_target,
-                    to_target: &r.to_target,
-                    old_id: &r.old_id,
-                    new_id: &r.new_id,
-                    from: [r.from.start(), r.from.end()],
-                    to: [r.to.start(), r.to.end()],
-                })
-                .collect(),
-            skipped: r
-                .skipped
-                .iter()
-                .map(|s| SkippedView {
-                    target: &s.target,
-                    id: &s.id,
-                    reason_code: s.reason.code(),
-                    reason: s.reason.human(),
-                })
-                .collect(),
-            unchanged: r.unchanged,
-        }
-    }
 }

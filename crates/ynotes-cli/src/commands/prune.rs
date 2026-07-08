@@ -9,10 +9,11 @@
 use std::io::Write as _;
 
 use serde::Serialize;
+use ynotes::contract::scope_word_json;
 use ynotes::{AnchorStatus, Store};
 
 use super::json_envelope;
-use super::render::{body_excerpt, scope_word_json, short_id};
+use super::render::{body_excerpt, short_id};
 use crate::colour::{Colour, paint};
 use crate::command_error::CommandError;
 
