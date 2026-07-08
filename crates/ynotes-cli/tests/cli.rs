@@ -156,6 +156,38 @@ fn init_creates_a_store_and_is_idempotent() {
         .stdout(predicate::str::contains("already exists"));
 }
 
+/// The first `save` in a git repo with no store bootstraps one at the repo
+/// root and says so on the human line; a second save into the now-existing
+/// store does not repeat the clause. This is the zero-ceremony adoption path —
+/// note #1 costs no separate `ynotes init`.
+#[test]
+fn save_auto_creates_the_store_at_the_git_root_on_first_save() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A bare `.git` directory is enough to mark the repo root; no store yet.
+    std::fs::create_dir(dir.path().join(".git")).expect("fake git repo");
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbeta\n").unwrap();
+
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.txt", "-m", "ctx"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created .ynotes store"));
+    assert!(
+        dir.path().join(".ynotes/HEAD").is_file(),
+        "the store must be created at the git root"
+    );
+
+    // The store now exists, so the second save reuses it silently — no repeat
+    // of the bootstrap clause.
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.txt", "-m", "ctx"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created .ynotes store").not());
+}
+
 #[test]
 fn save_then_query_round_trips_through_the_binary() {
     let dir = tempfile::tempdir().expect("tempdir");

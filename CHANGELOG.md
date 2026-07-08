@@ -10,6 +10,13 @@ explicitly here.
 ## [Unreleased]
 
 ### Added
+- **First `save` auto-creates the store at the git root.** Running `save` in a
+  git repository with no `.ynotes` yet bootstraps one at the repository root
+  (the enclosing `.git` directory *or* file, so worktrees are handled) and says
+  so on the human confirmation line — adoption no longer costs a separate
+  `ynotes init`. Placement is deterministic (repo root only); with no git root
+  the save still fails and directs you to `ynotes init`. The `--json` payload is
+  unchanged for now.
 - **`ynotes show <id>`**: view a single note by full id or unambiguous hex
   prefix (>= 4 chars), resolved against current code — the by-id read that sat
   between `query` (by file/line) and `list` (the whole store). Shows the body

@@ -300,3 +300,46 @@ fn save_superseding_is_a_no_op_for_identical_content() {
     let notes = store.notes_for("src/app.rs").expect("notes_for").notes;
     assert_eq!(notes.len(), 1, "still exactly one note");
 }
+
+#[test]
+fn discover_or_init_creates_store_at_git_root() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap(); // a git repo
+    let sub = dir.path().join("src");
+    std::fs::create_dir(&sub).unwrap();
+    let (store, created) = ynotes::Store::discover_or_init_from(&sub).unwrap();
+    assert!(created);
+    assert!(dir.path().join(".ynotes").is_dir());
+    // Canonicalise both sides: `tempdir()` hands back a non-canonical path
+    // (e.g. macOS's `/var` symlink to `/private/var`), and `workdir()` returns
+    // the git root verbatim, so a raw `==` would fail on that spelling gap.
+    assert_eq!(
+        store.workdir().unwrap().canonicalize().unwrap(),
+        dir.path().canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn discover_or_init_reuses_an_existing_store_without_creating() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    ynotes::Store::init(dir.path()).unwrap();
+    let (_, created) = ynotes::Store::discover_or_init_from(dir.path()).unwrap();
+    assert!(!created);
+}
+
+#[test]
+fn discover_or_init_without_git_propagates_store_not_found() {
+    let dir = tempfile::tempdir().unwrap(); // no .git
+    let err = ynotes::Store::discover_or_init_from(dir.path()).unwrap_err();
+    assert!(matches!(err, ynotes::Error::StoreNotFound { .. }));
+}
+
+#[test]
+fn discover_or_init_treats_a_git_file_as_a_root() {
+    // git worktrees have `.git` as a FILE, not a directory.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".git"), "gitdir: elsewhere\n").unwrap();
+    let (_, created) = ynotes::Store::discover_or_init_from(dir.path()).unwrap();
+    assert!(created);
+}

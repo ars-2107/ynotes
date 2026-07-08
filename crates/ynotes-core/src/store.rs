@@ -340,6 +340,39 @@ impl Store {
         Self::discover_from(&start)
     }
 
+    /// Discover the store from `start` upward; when none exists, create one at
+    /// the enclosing git repository's root (`.git` directory *or* file — a
+    /// worktree's `.git` is a file). Returns the store and whether this call
+    /// created it. The zero-ceremony bootstrap both front-ends' save paths
+    /// share: adoption must not cost a separate `init` step, but a store is
+    /// only ever created somewhere deterministic — the repo root.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::StoreNotFound`] when no store exists and no git root encloses
+    /// `start` (an explicit `ynotes init` is the remedy); otherwise any
+    /// [`Store::init`]/[`Store::discover_from`] failure.
+    pub fn discover_or_init_from(start: &Path) -> Result<(Self, bool)> {
+        match Self::discover_from(start) {
+            Ok(store) => Ok((store, false)),
+            Err(Error::StoreNotFound { .. }) => {
+                let Some(root) = find_git_root(start) else {
+                    return Err(Error::StoreNotFound {
+                        searched_from: start.to_path_buf(),
+                    });
+                };
+                // `Store::init` is idempotent (it reopens a pre-existing valid
+                // store), so the benign discover/init race — another process
+                // creating the same root's store between the failed
+                // `discover_from` and here — resolves to a reopen, not a
+                // conflict. Report `true`: this call reached init for a store
+                // discovery did not find.
+                Ok((Self::init(&root)?, true))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// The `.ynotes` directory backing this store.
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -1313,6 +1346,18 @@ impl Store {
         let _unlocked = FileExt::unlock(&file);
         result
     }
+}
+
+/// Nearest ancestor (including `start`) containing `.git` — dir or file.
+///
+/// A worktree's `.git` is a file, not a directory, so existence — not
+/// directoryness — is the test; this is what lets [`Store::discover_or_init_from`]
+/// anchor a new store at a worktree root as readily as at a plain clone.
+fn find_git_root(start: &Path) -> Option<std::path::PathBuf> {
+    start
+        .ancestors()
+        .find(|d| d.join(".git").exists())
+        .map(Path::to_path_buf)
 }
 
 /// Smallest accepted id prefix. Four hex characters distinguish 65,536 ids —

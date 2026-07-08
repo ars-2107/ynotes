@@ -41,6 +41,11 @@ pub(crate) enum Command {
     /// breadcrumbs for an agent (or human) on a later task; a one-shot read
     /// likely does not need it. To replace a note's body in place, prefer
     /// `ynotes update <id>` over a second `save`.
+    ///
+    /// If no store exists yet, the first save bootstraps one at the enclosing
+    /// git repository's root, so adoption needs no separate `ynotes init`. With
+    /// no git repository to anchor it, the save fails and directs you to run
+    /// `ynotes init` explicitly.
     Save {
         /// The file the context is about.
         file: PathBuf,

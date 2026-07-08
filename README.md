@@ -63,7 +63,7 @@ Requires a Rust toolchain (see `rust-toolchain.toml`; MSRV 1.85).
 cargo run --bin ynotes -- doctor
 cargo run --bin ynotes -- doctor --json              # machine-readable health check
 cargo run --bin ynotes -- completions zsh
-cargo run --bin ynotes -- init                       # create a .ynotes store
+cargo run --bin ynotes -- init                       # create a .ynotes store (optional: the first save auto-creates one at the git root)
 cargo run --bin ynotes -- save src/lib.rs 40:78 -m "why this matters"
 cargo run --bin ynotes -- query src/lib.rs 50        # context overlapping line 50
 cargo run --bin ynotes -- query src/lib.rs --json    # machine-readable

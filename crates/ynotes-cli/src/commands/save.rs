@@ -42,7 +42,17 @@ fn run_inner(
     message: Option<&str>,
     json: bool,
 ) -> Result<(), CommandError> {
-    let store = Store::discover().map_err(CommandError::Engine)?;
+    // Discover from the current directory, exactly as every other subcommand
+    // does. The start point must be the cwd, not the target file's parent: a
+    // target *outside* the store has to be discovered against the current store
+    // and refused by `relativize` below (a usage error, exit 2) — starting from
+    // the target's own parent would instead send discovery off to wherever that
+    // path lives and lose the store entirely. When no store is found,
+    // `discover_or_init_from` bootstraps one at the enclosing git root — the
+    // first-save zero-ceremony path.
+    let cwd = std::env::current_dir()?;
+    let (store, store_created) =
+        Store::discover_or_init_from(&cwd).map_err(CommandError::Engine)?;
     // The symlink-escape guard runs before `relativize` because it answers a
     // question lexical relativisation cannot: a path *spelled* inside the
     // work tree but pointing outside via a symlink. It now restricts itself
@@ -100,16 +110,29 @@ fn run_inner(
         } else {
             String::new()
         };
+        // Announce the zero-ceremony bootstrap on the human line only: the first
+        // save in a git repo just created the store, so name where it landed.
+        // The `--json` payload is deliberately untouched here (`store_created`
+        // joins the contract in a later, single-commit `v` bump).
+        let created_store_clause = if store_created {
+            format!(
+                " (created .ynotes store at {})",
+                store.workdir().map_err(CommandError::Engine)?.display()
+            )
+        } else {
+            String::new()
+        };
         writeln!(
             out,
-            "{} {} note {} for {} {}:{}{}",
+            "{} {} note {} for {} {}:{}{}{}",
             if created { "saved" } else { "exists" },
             scope_word(scope),
             &note.id[..note.id.len().min(12)],
             target,
             range.start(),
             range.end(),
-            superseded_clause
+            superseded_clause,
+            created_store_clause
         )?;
     }
     Ok(())
