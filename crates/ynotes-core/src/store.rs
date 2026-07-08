@@ -347,12 +347,23 @@ impl Store {
     /// share: adoption must not cost a separate `init` step, but a store is
     /// only ever created somewhere deterministic — the repo root.
     ///
+    /// `$YNOTES_DIR`, when set (pointed directly at a `.ynotes` directory),
+    /// wins outright — the same precedence as [`Store::discover`], so the
+    /// write path cannot disagree with the read paths about which store is in
+    /// force. The override is never a creation site: an explicit override
+    /// names a store that must already exist, so pointing it at a non-store
+    /// is refused rather than conjuring a store at an arbitrary location.
+    ///
     /// # Errors
     ///
     /// [`Error::StoreNotFound`] when no store exists and no git root encloses
-    /// `start` (an explicit `ynotes init` is the remedy); otherwise any
-    /// [`Store::init`]/[`Store::discover_from`] failure.
+    /// `start` (an explicit `ynotes init` is the remedy), or
+    /// [`Error::Invalid`] if `$YNOTES_DIR` does not point at a valid store;
+    /// otherwise any [`Store::init`]/[`Store::discover_from`] failure.
     pub fn discover_or_init_from(start: &Path) -> Result<(Self, bool)> {
+        if let Some(dir) = std::env::var_os(ENV_DIR) {
+            return Ok((Self::open(&PathBuf::from(dir))?, false));
+        }
         match Self::discover_from(start) {
             Ok(store) => Ok((store, false)),
             Err(Error::StoreNotFound { .. }) => {

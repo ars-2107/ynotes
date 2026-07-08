@@ -343,3 +343,29 @@ fn discover_or_init_treats_a_git_file_as_a_root() {
     let (_, created) = ynotes::Store::discover_or_init_from(dir.path()).unwrap();
     assert!(created);
 }
+
+/// `$YNOTES_DIR` wins over both discovery and the git-root bootstrap,
+/// mirroring `discover()`'s precedence: with the override pointing at a valid
+/// store elsewhere, `discover_or_init_from` inside a git repo with no store
+/// returns the override store (`created == false`) and creates nothing in the
+/// repo — an explicit override is never a creation site. `temp-env` scopes
+/// the mutation (set, run, restore, under a global lock), and nextest runs
+/// each test in its own process anyway.
+#[test]
+fn discover_or_init_honours_ynotes_dir_and_never_creates_there() {
+    let store_dir = tempfile::tempdir().unwrap();
+    let store = Store::init(store_dir.path()).unwrap();
+
+    let git_dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(git_dir.path().join(".git")).unwrap();
+
+    temp_env::with_var("YNOTES_DIR", Some(store.root().as_os_str()), || {
+        let (found, created) = ynotes::Store::discover_or_init_from(git_dir.path()).unwrap();
+        assert!(!created, "an explicit override never creates a store");
+        assert_eq!(found.root(), store.root(), "the override store is returned");
+        assert!(
+            !git_dir.path().join(".ynotes").exists(),
+            "no store is conjured in the git repo while the override is set"
+        );
+    });
+}

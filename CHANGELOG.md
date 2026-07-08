@@ -15,8 +15,10 @@ explicitly here.
   (the enclosing `.git` directory *or* file, so worktrees are handled) and says
   so on the human confirmation line — adoption no longer costs a separate
   `ynotes init`. Placement is deterministic (repo root only); with no git root
-  the save still fails and directs you to `ynotes init`. The `--json` payload is
-  unchanged for now.
+  the save still fails and directs you to `ynotes init`. `$YNOTES_DIR` keeps its
+  override precedence and is never a creation site — pointing it at a non-store
+  is refused rather than bootstrapping there. The `--json` payload is unchanged
+  for now.
 - **`ynotes show <id>`**: view a single note by full id or unambiguous hex
   prefix (>= 4 chars), resolved against current code — the by-id read that sat
   between `query` (by file/line) and `list` (the whole store). Shows the body

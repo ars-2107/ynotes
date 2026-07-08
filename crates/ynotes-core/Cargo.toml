@@ -68,3 +68,8 @@ tree-sitter-css = "0.25.0"
 # Snapshot testing. A natural fit for ynotes's structured drift/diff output:
 # assert on rendered text, review changes as diffs.
 insta = "1"
+# Scoped env-var mutation for the `$YNOTES_DIR` override tests. Edition 2024
+# makes `std::env::set_var` an unsafe fn and this workspace forbids `unsafe`,
+# so the mutation lives in this crate (set, run, restore, under a global
+# lock). MIT, so the `cargo deny` licence allow-list is unaffected.
+temp-env = "0.3"
