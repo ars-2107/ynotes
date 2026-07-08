@@ -193,7 +193,7 @@ file in a week?* If yes, leave a note. If no, skip.
   published as [`ynotes.schema.json`](ynotes.schema.json) (JSON Schema
   draft 2020-12), so it will not silently change.
 - **`save` is idempotent.** A note's id is a content hash of
-  `(target, scope, anchor, body)` — no timestamp. Re-running an identical
+  `(target, scope, bundle, body)` — no timestamp. Re-running an identical
   `save` returns the same id with `"created": false` instead of duplicating,
   so retrying a tool call is safe. Editing the body makes a *new* note that
   supersedes the old — the earlier note at that location is retired, not left
