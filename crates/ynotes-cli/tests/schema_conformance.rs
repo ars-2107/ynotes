@@ -33,7 +33,7 @@ fn git(dir: &Path, args: &[&str]) -> bool {
 /// Compile the committed schema once. `validator_for` reads the draft from the
 /// schema's `$schema` (2020-12) and resolves the all-local `$ref`s.
 fn schema() -> Validator {
-    let src = include_str!("../ynotes.schema.json");
+    let src = include_str!("../../../ynotes.schema.json");
     let value: serde_json::Value = serde_json::from_str(src).expect("schema is valid JSON");
     jsonschema::validator_for(&value).expect("schema compiles")
 }

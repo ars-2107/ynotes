@@ -1,0 +1,70 @@
+[package]
+name = "ynotes-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# ynotes is distributed via npm and GitHub Releases, not crates.io (see
+# AGENTS.md -> Releases). `publish = false` makes `cargo publish` refuse, so
+# the crate cannot reach a registry by accident.
+publish = false
+
+[lib]
+# The lib target keeps the crate's historical name so `use ynotes::…` holds
+# everywhere (binary modules, tests, doctests) — the package rename is the
+# workspace-level identity, not the import path.
+name = "ynotes"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# Content-addressed note ids (SHA-256, hex). Pure-Rust RustCrypto crate,
+# MIT/Apache (keeps the `cargo deny` licence set clean).
+sha2 = "0.10"
+# Timestamps. `jiff` is the modern datetime crate; avoids the `time` crate's
+# epoch/UTC traps.
+jiff = { version = "0.2", features = ["serde"] }
+# Atomic note writes: write to a temp file in the same dir, then rename.
+tempfile = "3"
+# Cross-platform advisory file locking for the by-path index. Two concurrent
+# `save`s of *different* notes to the same target previously each did an
+# unsynchronised read-modify-write of `.ynotes/index/by-path.json` and one
+# could lose the other's entry. `fs4` wraps POSIX `flock` / Windows
+# `LockFileEx`; MIT/Apache, no extra licences for `cargo deny`.
+fs4 = "0.13"
+# R4 structural anchoring. tree-sitter parses the file; one grammar crate per
+# supported language (always on, broad set — a deliberate product choice).
+# Each grammar ships vendored C built via `cc`; all are MIT/Apache, so the
+# strict `cargo deny` licence allow-list is unaffected. The grammar/core
+# versions below are a resolved-and-built-together set; bump deliberately.
+tree-sitter = "0.26.8"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-python = "0.25.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-java = "0.23.5"
+tree-sitter-c = "0.24.2"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-bash = "0.25.1"
+tree-sitter-json = "0.24.8"
+tree-sitter-html = "0.23.2"
+tree-sitter-css = "0.25.0"
+
+[dev-dependencies]
+# Snapshot testing. A natural fit for ynotes's structured drift/diff output:
+# assert on rendered text, review changes as diffs.
+insta = "1"

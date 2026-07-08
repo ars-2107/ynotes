@@ -1872,24 +1872,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
-name = "ynotes"
+name = "ynotes-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "clap",
  "clap_complete",
+ "insta",
+ "jsonschema",
+ "predicates",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+ "ynotes-core",
+]
+
+[[package]]
+name = "ynotes-core"
+version = "0.1.0"
+dependencies = [
  "fs4",
  "insta",
  "jiff",
- "jsonschema",
- "predicates",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
  "tracing",
- "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",

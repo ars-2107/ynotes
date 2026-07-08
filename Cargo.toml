@@ -1,17 +1,24 @@
-# ynotes — a single crate with two faces.
+# ynotes — a workspace with two members.
 #
-#   src/lib.rs   the engine. Every behaviour lives here. This is the library.
-#   src/main.rs  a thin binary that parses arguments and renders the engine's
-#                results. Its modules (cli, commands, logging, command_error)
-#                are compiled into the binary only — they are NOT part of the
-#                library, so a CLI concern cannot leak into the engine.
+#   crates/ynotes-core   the engine. Every behaviour lives here. The library
+#                        crate; its lib target keeps the historical name
+#                        `ynotes`, so `use ynotes::…` holds everywhere.
+#   crates/ynotes-cli    a thin binary that parses arguments and renders the
+#                        engine's results. Its modules (cli, commands, logging,
+#                        command_error) are CLI-only — they cannot leak into the
+#                        engine, which lives in a separate crate.
 #
-# One crate, lib + bin. When a second front-end (an MCP
-# server) becomes real, `src/lib.rs` and its modules lift out into their own
-# crate with no logic changes — the boundary already exists. See AGENTS.md.
+# Two crates, engine + front-end. When a second front-end (an MCP server)
+# becomes real, `ynotes-mcp` joins as a third member beside `ynotes-core` with
+# no logic changes — the boundary already exists. See AGENTS.md.
 
-[package]
-name = "ynotes"
+[workspace]
+resolver = "3"
+members = ["crates/ynotes-core", "crates/ynotes-cli"]
+
+# Shared package metadata. Each member inherits these with `field.workspace =
+# true`, so version, MSRV and licence live in one place.
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 # MSRV. Edition 2024 stabilised in 1.85, so that is the floor. Keep in sync
@@ -24,23 +31,11 @@ homepage = "https://github.com/ars-2107/ynotes"
 authors = ["ynotes contributors"]
 keywords = ["cli", "context", "annotations", "agents", "code"]
 categories = ["command-line-utilities", "development-tools"]
-default-run = "ynotes"
-# ynotes is distributed via npm and GitHub Releases, not crates.io (see
-# AGENTS.md -> Releases). `publish = false` makes `cargo publish` refuse, so
-# the crate cannot reach a registry by accident.
-publish = false
-
-[lib]
-name = "ynotes"
-path = "src/lib.rs"
-
-[[bin]]
-name = "ynotes"
-path = "src/main.rs"
 
 # Lints. CI runs clippy with `-D warnings`, so every "warn" is a hard gate in
-# CI while staying non-blocking for local iteration.
-[lints.rust]
+# CI while staying non-blocking for local iteration. Each member opts in with
+# `[lints] workspace = true`.
+[workspace.lints.rust]
 # ynotes needs no `unsafe`. Forbid (not deny) so it cannot be re-enabled with
 # a local `#[allow]`.
 unsafe_code = "forbid"
@@ -51,70 +46,24 @@ missing_debug_implementations = "warn"
 unreachable_pub = "warn"
 let_underscore_drop = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # Pedantic lints that are more noise than signal for a CLI of this size.
 must_use_candidate = "allow"
 module_name_repetitions = "allow"
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 
-[dependencies]
-clap = { version = "4", features = ["derive", "wrap_help"] }
-clap_complete = "4"
-thiserror = "2"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Dependencies shared by both members are pinned here once and referenced with
+# `dep.workspace = true`; crate-specific deps stay in each member's manifest.
+[workspace.dependencies]
 # Note records and the by-path index are JSON (machine artefacts like
 # `.git/objects`).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Content-addressed note ids (SHA-256, hex). Pure-Rust RustCrypto crate,
-# MIT/Apache (keeps the `cargo deny` licence set clean).
-sha2 = "0.10"
-# Timestamps. `jiff` is the modern datetime crate; avoids the `time` crate's
-# epoch/UTC traps.
-jiff = { version = "0.2", features = ["serde"] }
-# Atomic note writes: write to a temp file in the same dir, then rename.
-tempfile = "3"
-# Cross-platform advisory file locking for the by-path index. Two concurrent
-# `save`s of *different* notes to the same target previously each did an
-# unsynchronised read-modify-write of `.ynotes/index/by-path.json` and one
-# could lose the other's entry. `fs4` wraps POSIX `flock` / Windows
-# `LockFileEx`; MIT/Apache, no extra licences for `cargo deny`.
-fs4 = "0.13"
-# R4 structural anchoring. tree-sitter parses the file; one grammar crate per
-# supported language (always on, broad set — a deliberate product choice).
-# Each grammar ships vendored C built via `cc`; all are MIT/Apache, so the
-# strict `cargo deny` licence allow-list is unaffected. The grammar/core
-# versions below are a resolved-and-built-together set; bump deliberately.
-tree-sitter = "0.26.8"
-tree-sitter-rust = "0.24.2"
-tree-sitter-typescript = "0.23.2"
-tree-sitter-javascript = "0.25.0"
-tree-sitter-python = "0.25.0"
-tree-sitter-go = "0.25.0"
-tree-sitter-java = "0.23.5"
-tree-sitter-c = "0.24.2"
-tree-sitter-cpp = "0.23.4"
-tree-sitter-ruby = "0.23.1"
-tree-sitter-bash = "0.25.1"
-tree-sitter-json = "0.24.8"
-tree-sitter-html = "0.23.2"
-tree-sitter-css = "0.25.0"
-
-[dev-dependencies]
-# Black-box testing of the built binary.
-assert_cmd = "2"
-predicates = "3"
-# Snapshot testing. A natural fit for ynotes's structured drift/diff output:
-# assert on rendered text, review changes as diffs.
-insta = "1"
-# Validates real `--json` output against the published `ynotes.schema.json`, so
-# the stable, versioned agent contract (invariant #7) cannot drift from the
-# schema file undetected. Test-only; never linked into the shipped binary.
-jsonschema = { version = "0.46", default-features = false }
+thiserror = "2"
+tracing = "0.1"
 
 # --- Build profiles -------------------------------------------------------------
 
