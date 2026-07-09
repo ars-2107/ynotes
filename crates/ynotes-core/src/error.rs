@@ -24,6 +24,24 @@ fn display_io_error(path: &Path, source: &std::io::Error) -> String {
     }
 }
 
+/// Render an `Error::CodeAmbiguous` for `Display`. Lifted out of the
+/// `#[error(...)]` attribute because joining the candidate lines needs real
+/// code. The wording is agent-facing contract, not decoration: the MCP
+/// surface flattens the variant to this string, so the message is the whole
+/// recovery protocol at the point of failure.
+fn display_code_ambiguous(lines: &[u32]) -> String {
+    let joined = lines
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "the quoted code occurs {} times (lines {joined}) and start matches none of them; \
+         correct start, or quote more surrounding lines",
+        lines.len()
+    )
+}
+
 /// A specialised [`Result`](std::result::Result) for engine operations.
 ///
 /// Defaulting the error parameter to [`Error`] lets call sites write
@@ -105,6 +123,28 @@ pub enum Error {
     /// line/range family) so a front-end can react to each independently.
     #[error("{0}")]
     InvalidIdPrefix(String),
+
+    /// The `code` quote passed to a verified save was found nowhere in the
+    /// target file: the caller holds a stale read of the file, or the wrong
+    /// file entirely. Front-ends map this to their usage class (the CLI exits
+    /// `2`). The `Display` text carries the recovery — re-read and re-quote —
+    /// because the MCP surface flattens the variant into its message.
+    #[error(
+        "the quoted code is not in this file; re-read the file and quote the region as it reads now"
+    )]
+    CodeNotFound,
+
+    /// The `code` quote passed to a verified save occurs at more than one
+    /// place in the target file and none of them is the declared start: the
+    /// coordinates are stale *and* the quote collides. Carries every
+    /// candidate so the retry is one step — correct `start` to one of them,
+    /// or quote more lines. Usage class, like [`Error::CodeNotFound`]; the
+    /// `Display` text is the recovery protocol.
+    #[error("{}", display_code_ambiguous(lines))]
+    CodeAmbiguous {
+        /// Every 1-based line where the quote matches, ascending.
+        lines: Vec<u32>,
+    },
 
     /// A *symlink* whose canonical target lives outside the store's work tree.
     /// Kept distinct from [`Error::OutsideStore`] so the message can name the

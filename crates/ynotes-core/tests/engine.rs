@@ -37,3 +37,17 @@ fn resolve_scope_whole_file_is_file_scope() {
     assert!(matches!(scope, ynotes::Scope::File));
     assert_eq!((range.start(), range.end()), (1, 2));
 }
+
+#[test]
+fn code_not_found_renders_the_reread_recovery() {
+    let err = ynotes::Error::CodeNotFound;
+    insta::assert_snapshot!(err.to_string(), @"the quoted code is not in this file; re-read the file and quote the region as it reads now");
+}
+
+#[test]
+fn code_ambiguous_renders_every_candidate_and_the_diagnosis() {
+    let err = ynotes::Error::CodeAmbiguous {
+        lines: vec![61, 118, 204],
+    };
+    insta::assert_snapshot!(err.to_string(), @"the quoted code occurs 3 times (lines 61, 118, 204) and start matches none of them; correct start, or quote more surrounding lines");
+}
