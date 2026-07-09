@@ -125,6 +125,160 @@ pub fn resolve_scope(spec: LineSpec, source: &SourceFile) -> Result<(Scope, Line
     Ok((scope, range))
 }
 
+/// Maps a location [`LineSpec`] plus the caller's quote of the region's text
+/// (`code`) to its scope and the [`LineRange`] to capture, verifying the
+/// location against `source` and correcting it when the coordinates have
+/// gone stale.
+///
+/// The verified sibling of [`resolve_scope`]: the quote's first line is the
+/// region's first line, `spec` is the caller's claim about where that is,
+/// and the file is the authority. The rule, in order:
+///
+/// 1. the quote matches at the declared start → corroborated; the save
+///    proceeds there, however many *other* places the quote occurs;
+/// 2. the quote matches nowhere → [`Error::CodeNotFound`];
+/// 3. the quote matches exactly once, elsewhere → the coordinates were
+///    stale; the region relocates to the match;
+/// 4. several matches, none at the declared start → [`Error::CodeAmbiguous`],
+///    carrying every candidate start line.
+///
+/// Matching trims each line on both sides (indentation and trailing
+/// whitespace are ignored, the text is not; interior blank lines stay
+/// significant) and is otherwise **exact-or-refuse**. Fuzzy matching is a
+/// resolve-time recovery mechanism: there it ships capped below the exact
+/// rungs with an honest `drifted` verdict attached. A save has no verdict to
+/// attach — a fuzzily mislocated save is captured into the selector bundle
+/// as permanent ground truth that every later resolve will faithfully track.
+/// Do not "improve" this path with the fuzzy rung.
+///
+/// The region's length is `end - start + 1` when `spec` declares an end,
+/// else the quote's line count. A quote longer than a declared span still
+/// matches in full — the overhang is a suffix fingerprint that pins down
+/// *where* the region is, never *what* it spans. Blank edge lines of the
+/// quote are dropped; leading ones advance the declared start (and shrink a
+/// declared span), so a truthful quote that opens blank corroborates instead
+/// of spuriously relocating.
+///
+/// # Errors
+///
+/// [`Error::InvalidLocation`] if `spec` is [`LineSpec::Whole`] (`code`
+/// requires a starting line), the quote is empty or blank, the quote's blank
+/// lead pushes the start past a declared end, or the resolved region runs
+/// past the end of `source`; [`Error::CodeNotFound`] and
+/// [`Error::CodeAmbiguous`] per the rule above.
+pub fn resolve_scope_verified(
+    spec: LineSpec,
+    code: &str,
+    source: &SourceFile,
+) -> Result<(Scope, LineRange)> {
+    let (declared_start, declared_end) = match spec {
+        LineSpec::Whole => {
+            return Err(Error::InvalidLocation(
+                "`code` requires a starting line".to_owned(),
+            ));
+        }
+        LineSpec::Line(n) => (n, None),
+        LineSpec::Range(r) => (r.start(), Some(r.end())),
+    };
+    // `LineSpec::Line(0)` is constructible even though the parser rejects it;
+    // guard here so the 0-based membership test below cannot underflow.
+    if declared_start == 0 {
+        return Err(Error::InvalidLocation(
+            "line numbers are 1-based; `0` is not a valid line".to_owned(),
+        ));
+    }
+
+    // Normalise the quote exactly as the file is normalised below: trim each
+    // line on both sides. Blank *edge* lines are dropped (callers quote with
+    // sloppy edges); interior blanks stay significant. `str::lines()` splits
+    // the quote the same way `SourceFile::read` split the file, so a CRLF/LF
+    // mismatch needs no special handling.
+    let quote: Vec<&str> = code.lines().map(str::trim).collect();
+    let lead = quote.iter().take_while(|l| l.is_empty()).count();
+    let trail = quote.iter().rev().take_while(|l| l.is_empty()).count();
+    if lead + trail >= quote.len() {
+        return Err(Error::InvalidLocation(
+            "`code` is empty; quote the region's text as the file reads now".to_owned(),
+        ));
+    }
+    let needle = &quote[lead..quote.len() - trail];
+
+    // `start` names the quote's first line as the caller wrote it, so the
+    // dropped blank lead advances it (and shrinks a declared span). All
+    // arithmetic in u64: a caller-supplied `end` of `u32::MAX` must report
+    // past-EOF below, not overflow here.
+    let start = u64::from(declared_start) + u64::try_from(lead).unwrap_or(u64::MAX);
+    let span = match declared_end {
+        Some(end) => {
+            let end = u64::from(end);
+            if end < start {
+                return Err(Error::InvalidLocation(format!(
+                    "the quote's leading blank lines advance start to {start}, past end {end}"
+                )));
+            }
+            end - start + 1
+        }
+        None => u64::try_from(needle.len()).unwrap_or(u64::MAX),
+    };
+    // Scope keeps resolve_scope's wart intact: `Line(n)` is a line note only
+    // when the quote is one line; a declared range is always a range note,
+    // even a degenerate `n:n`.
+    let scope = match spec {
+        LineSpec::Line(_) if needle.len() == 1 => Scope::Line,
+        _ => Scope::Range,
+    };
+
+    // One scan for every match of the trimmed quote in the trimmed file.
+    // `str::trim` borrows, so the haystack is a Vec of subslices — no
+    // per-line allocation. A needle longer than the file yields no windows,
+    // which falls out as CodeNotFound below.
+    let hay: Vec<&str> = source.lines_slice().iter().map(|l| l.trim()).collect();
+    let matches: Vec<usize> = hay
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(i, w)| (w == needle).then_some(i))
+        .collect();
+
+    let start0 = start - 1;
+    let at_start = matches
+        .iter()
+        .any(|&m| u64::try_from(m).unwrap_or(u64::MAX) == start0);
+    let origin = if at_start {
+        // Corroborated: the caller's coordinates check out, and collisions
+        // elsewhere are irrelevant — this is what keeps duplicate-heavy
+        // files saveable at all (spec §4.4).
+        start
+    } else {
+        match matches[..] {
+            [] => return Err(Error::CodeNotFound),
+            [only] => u64::try_from(only).unwrap_or(u64::MAX) + 1,
+            _ => {
+                return Err(Error::CodeAmbiguous {
+                    lines: matches
+                        .iter()
+                        .map(|&m| u32::try_from(m + 1).unwrap_or(u32::MAX))
+                        .collect(),
+                });
+            }
+        }
+    };
+
+    let end = origin + span - 1;
+    let lines = u64::from(source.line_count());
+    if end > lines {
+        return Err(Error::InvalidLocation(format!(
+            "line {end} is past the end of the file ({lines} lines)"
+        )));
+    }
+    // Both bounds are >= 1 and <= `lines` <= `u32::MAX`: exact conversions.
+    let range = LineRange::new(
+        u32::try_from(origin).unwrap_or(u32::MAX),
+        u32::try_from(end).unwrap_or(u32::MAX),
+    )
+    .map_err(|e| Error::InvalidLocation(e.to_string()))?;
+    Ok((scope, range))
+}
+
 /// A note paired with where (and how confidently) it resolved.
 #[derive(Debug, Clone)]
 pub struct ResolvedNote {

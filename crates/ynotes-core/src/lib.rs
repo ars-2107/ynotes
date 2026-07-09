@@ -54,6 +54,7 @@ pub use git::{GitContext, git_version};
 pub use note::{Note, Scope};
 pub use query::{
     LineSpec, ListResult, QueryResult, ResolvedNote, list, lookup, query, resolve_scope,
+    resolve_scope_verified,
 };
 pub use reanchor::{
     ReanchorChange, ReanchorRelocation, ReanchorReport, ReanchorSkip, ReanchorSkipReason, reanchor,
