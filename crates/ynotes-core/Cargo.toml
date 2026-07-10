@@ -32,7 +32,7 @@ thiserror.workspace = true
 tracing.workspace = true
 # Content-addressed note ids (SHA-256, hex). Pure-Rust RustCrypto crate,
 # MIT/Apache (keeps the `cargo deny` licence set clean).
-sha2 = "0.10"
+sha2 = "0.11"
 # Timestamps. `jiff` is the modern datetime crate; avoids the `time` crate's
 # epoch/UTC traps.
 jiff = { version = "0.2", features = ["serde"] }
