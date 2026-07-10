@@ -362,3 +362,80 @@ fn verified_quote_longer_than_the_file_is_code_not_found() {
     .unwrap_err();
     assert!(matches!(err, ynotes::Error::CodeNotFound));
 }
+
+/// A real on-disk nine-line file, for the id keystones: `capture_full` walks
+/// the filesystem (git discovery), so these need a genuine path. The bare
+/// `.git/` directory pins discovery to the tempdir — hermetic whatever
+/// repository the test runner itself sits in.
+fn nine_line_file() -> (tempfile::TempDir, ynotes::SourceFile) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    let f = dir.path().join("a.rs");
+    std::fs::write(&f, "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n").unwrap();
+    let source = ynotes::SourceFile::read(&f).unwrap();
+    (dir, source)
+}
+
+/// Build the note a save would store for this resolution, in the same git
+/// state, so ids are comparable.
+fn note_for(
+    source: &ynotes::SourceFile,
+    scope: ynotes::Scope,
+    range: ynotes::LineRange,
+) -> ynotes::Note {
+    let bundle = ynotes::SelectorBundle::capture_full(source, range).unwrap();
+    ynotes::Note::new("a.rs".to_owned(), scope, bundle, "why".to_owned()).unwrap()
+}
+
+/// Keystone (spec §8): a verified line save and a bare coordinate save of the
+/// same line hash to the same note id — same file, same git state. This
+/// proves NOTHING across commits: `capture_full` folds the HEAD commit into
+/// the bundle when the file is tracked, so ids rotate with history by design.
+#[test]
+fn verified_and_bare_line_saves_share_an_id() {
+    let (_dir, source) = nine_line_file();
+    let (vs, vr) =
+        ynotes::resolve_scope_verified("5".parse::<ynotes::LineSpec>().unwrap(), "five", &source)
+            .unwrap();
+    let (bs, br) =
+        ynotes::resolve_scope("5".parse::<ynotes::LineSpec>().unwrap(), &source).unwrap();
+    assert_eq!((vs, vr), (bs, br));
+    assert_eq!(note_for(&source, vs, vr).id, note_for(&source, bs, br).id);
+}
+
+/// Keystone (spec §8): `{start: 5, code: <five lines>}` is the same note as
+/// `{start: 5, end: 9}`. Same-commit only; see the sibling test's caveat.
+#[test]
+fn verified_and_bare_range_saves_share_an_id() {
+    let (_dir, source) = nine_line_file();
+    let (vs, vr) = ynotes::resolve_scope_verified(
+        "5".parse::<ynotes::LineSpec>().unwrap(),
+        "five\nsix\nseven\neight\nnine",
+        &source,
+    )
+    .unwrap();
+    let (bs, br) =
+        ynotes::resolve_scope("5:9".parse::<ynotes::LineSpec>().unwrap(), &source).unwrap();
+    assert_eq!((vs, vr), (bs, br));
+    assert_eq!(note_for(&source, vs, vr).id, note_for(&source, bs, br).id);
+}
+
+/// Keystone (spec §8): a save whose stale coordinates the quote corrected is
+/// byte-identical — same id — to the save a correct caller would have made
+/// with fresh coordinates. An agent that retries with the corrected range
+/// gets `created: false`, not a duplicate. Same-commit only, as above.
+#[test]
+fn relocated_save_shares_an_id_with_fresh_coordinates() {
+    let (_dir, source) = nine_line_file();
+    let (vs, vr) = ynotes::resolve_scope_verified(
+        "2".parse::<ynotes::LineSpec>().unwrap(),
+        "five\nsix",
+        &source,
+    )
+    .unwrap();
+    assert_eq!((vr.start(), vr.end()), (5, 6));
+    let (bs, br) =
+        ynotes::resolve_scope("5:6".parse::<ynotes::LineSpec>().unwrap(), &source).unwrap();
+    assert_eq!((vs, vr), (bs, br));
+    assert_eq!(note_for(&source, vs, vr).id, note_for(&source, bs, br).id);
+}
