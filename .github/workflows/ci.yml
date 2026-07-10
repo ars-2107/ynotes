@@ -157,7 +157,10 @@ jobs:
         env:
           PKG: ${{ matrix.pkg }}
           RUNNER_OS: ${{ runner.os }}
-        run: |
+        # The adhoc-packages ignore: the `npm install -g` below installs our
+        # own tarballs packed two lines earlier, not registry packages, so
+        # the no-lockfile audit does not apply.
+        run: | # zizmor: ignore[adhoc-packages]
           set -euo pipefail
           # Build the host binary and drop it into its per-platform package.
           # Debug profile: this job tests launcher + packaging, not codegen.
