@@ -1721,6 +1721,29 @@ fn save_with_stale_coordinates_marks_the_correction_on_the_human_line() {
         .stdout(predicate::str::contains("5:6 (corrected from line 2)"));
 }
 
+#[test]
+fn save_with_a_stale_range_marks_the_correction_on_the_human_line() {
+    // The Range arm of the marker: a declared START:END whose start the quote
+    // corrects must be called out from the declared start, same as a bare line.
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("f.txt"),
+        "one\ntwo\nthree\nfour\nfive\nsix\n",
+    )
+    .expect("write");
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.txt", "4:5", "--code", "five\nsix", "-m", "ctx"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("5:6 (corrected from line 4)"));
+}
+
 /// A `--code` quote absent from the file refuses with exit 2 (usage). Under
 /// `--json` that refusal must ride the v12 failure envelope on stdout — carrying
 /// the engine's Display text — not an empty stdout plus a stderr diagnostic.
