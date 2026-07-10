@@ -43,7 +43,7 @@ tempfile = "3"
 # unsynchronised read-modify-write of `.ynotes/index/by-path.json` and one
 # could lose the other's entry. `fs4` wraps POSIX `flock` / Windows
 # `LockFileEx`; MIT/Apache, no extra licences for `cargo deny`.
-fs4 = "0.13"
+fs4 = "1.1"
 # R4 structural anchoring. tree-sitter parses the file; one grammar crate per
 # supported language (always on, broad set — a deliberate product choice).
 # Each grammar ships vendored C built via `cc`; all are MIT/Apache, so the
