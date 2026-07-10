@@ -9,7 +9,9 @@ use std::path::Path;
 use std::str::FromStr as _;
 
 use ynotes::contract::{SaveData, scope_word_json};
-use ynotes::{LineSpec, Note, Scope, SelectorBundle, SourceFile, Store, resolve_scope};
+use ynotes::{
+    LineSpec, Note, Scope, SelectorBundle, SourceFile, Store, resolve_scope, resolve_scope_verified,
+};
 
 use super::json_envelope;
 use super::safety::reject_if_escapes_workdir;
@@ -19,26 +21,29 @@ use crate::command_error::CommandError;
 ///
 /// # Errors
 ///
-/// [`CommandError::Usage`] for a bad location, an empty file note, or an
-/// empty message; [`CommandError::Engine`] / [`CommandError::Io`] otherwise.
+/// [`CommandError::Usage`] for a bad location, an empty file note, an empty
+/// message, or a `--code` quote the engine could not verify (found nowhere,
+/// or ambiguous); [`CommandError::Engine`] / [`CommandError::Io`] otherwise.
 /// Under `--json`, any failure is rendered as the agent-contract failure
 /// envelope on stdout and returned as [`CommandError::Rendered`].
 pub(crate) fn run(
     file: &Path,
     at: Option<&str>,
+    code: Option<&str>,
     message: Option<&str>,
     json: bool,
 ) -> Result<(), CommandError> {
     if json {
-        json_envelope::wrap(|| run_inner(file, at, message, true))
+        json_envelope::wrap(|| run_inner(file, at, code, message, true))
     } else {
-        run_inner(file, at, message, false)
+        run_inner(file, at, code, message, false)
     }
 }
 
 fn run_inner(
     file: &Path,
     at: Option<&str>,
+    code: Option<&str>,
     message: Option<&str>,
     json: bool,
 ) -> Result<(), CommandError> {
@@ -71,7 +76,13 @@ fn run_inner(
     let spec =
         LineSpec::from_str(at.unwrap_or("")).map_err(|e| CommandError::Usage(e.to_string()))?;
 
-    let (scope, range) = resolve_scope(spec, &source)?;
+    // Bare `?` on both arms so the engine's typed usage errors — including
+    // `CodeNotFound`/`CodeAmbiguous` from the verified path — reach the
+    // `From<ynotes::Error>` classification and exit `2`.
+    let (scope, range) = match code {
+        Some(code) => resolve_scope_verified(spec, code, &source)?,
+        None => resolve_scope(spec, &source)?,
+    };
 
     let body = match message {
         Some(m) => m.to_owned(),

@@ -42,6 +42,11 @@ pub(crate) enum Command {
     /// likely does not need it. To replace a note's body in place, prefer
     /// `ynotes update <id>` over a second `save`.
     ///
+    /// `--code` makes the save self-verifying: pass the region's text and the
+    /// line numbers are checked against the file — corrected when the code
+    /// moved, refused (with a recovery) when the quote is missing or
+    /// ambiguous. Recommended whenever the location was read before edits.
+    ///
     /// If no store exists yet, the first save bootstraps one at the enclosing
     /// git repository's root, so adoption needs no separate `ynotes init`. With
     /// no git repository to anchor it, the save fails and directs you to run
@@ -53,6 +58,15 @@ pub(crate) enum Command {
         /// `LINE` or `START:END`. Omit for a file-scoped note.
         #[arg(value_name = "LINE|START:END")]
         at: Option<String>,
+
+        /// The region's text, exactly as the file reads now. Verifies the
+        /// location: stale line numbers are corrected (the note lands where
+        /// the quoted code actually is), and a quote found nowhere or at
+        /// several places refuses with a recovery instead of anchoring to
+        /// the wrong region. The region's length comes from `START:END` when
+        /// given, else from the quote's line count.
+        #[arg(long, value_name = "TEXT", requires = "at")]
+        code: Option<String>,
 
         /// The context text. If omitted, it is read from stdin.
         #[arg(short, long)]
