@@ -52,6 +52,16 @@ fn code_ambiguous_renders_every_candidate_and_the_diagnosis() {
     insta::assert_snapshot!(err.to_string(), @"the quoted code occurs 3 times (lines 61, 118, 204) and start matches none of them; correct start, or quote more surrounding lines");
 }
 
+#[test]
+fn code_ambiguous_caps_the_candidate_list_at_ten() {
+    // The typed variant keeps every candidate; only the Display rendering is
+    // capped, so the count names all 12 while the list stops at 10.
+    let err = ynotes::Error::CodeAmbiguous {
+        lines: (1..=12).collect(),
+    };
+    insta::assert_snapshot!(err.to_string(), @"the quoted code occurs 12 times (lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, and 2 more) and start matches none of them; correct start, or quote more surrounding lines");
+}
+
 /// A `SourceFile` built directly from text, for tests that never touch disk.
 fn src(text: &str) -> ynotes::SourceFile {
     ynotes::SourceFile::from_lines(
@@ -179,6 +189,9 @@ fn verified_overhanging_quote_disambiguates_without_widening_the_span() {
 
 #[test]
 fn verified_span_past_eof_is_the_past_eof_usage_error() {
+    // The quote relocates the region (declared 2, matched 4), so the message
+    // must name the match line — the caller never passed the "line 11" the
+    // preserved span length produces.
     let s = src("one\ntwo\nthree\nfour\nfive");
     let err = ynotes::resolve_scope_verified(
         "2:9".parse::<ynotes::LineSpec>().unwrap(),
@@ -187,10 +200,7 @@ fn verified_span_past_eof_is_the_past_eof_usage_error() {
     )
     .unwrap_err();
     assert!(matches!(err, ynotes::Error::InvalidLocation(_)));
-    assert!(
-        err.to_string().contains("past the end of the file"),
-        "got: {err}"
-    );
+    insta::assert_snapshot!(err.to_string(), @"the quote matched at line 4, but the declared span ends at line 11, past the end of the file (5 lines)");
 }
 
 #[test]

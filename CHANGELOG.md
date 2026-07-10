@@ -15,10 +15,14 @@ explicitly here.
   numbers and the save verifies the location against the file before
   anchoring. Coordinates the quote corroborates save as given; stale
   coordinates are corrected when the quote matches exactly once elsewhere
-  (the payload's `range` reports where the note landed); a quote found
-  nowhere, or at several places none of which is the declared start, refuses
-  with a typed usage error (`CodeNotFound` / `CodeAmbiguous`, exit `2`) whose
-  message carries the one-step recovery. Matching trims each line
+  (the payload's `range` reports where the note landed, and the human
+  confirmation line marks the move with `(corrected from line N)`); a quote
+  found nowhere, or at several places none of which is the declared start,
+  refuses with a typed usage error (`CodeNotFound` / `CodeAmbiguous`, exit
+  `2`) whose message carries the one-step recovery — the ambiguous message
+  lists at most ten candidate lines (plus an "and N more" count), and a
+  corrected span that would end past EOF names the line the quote matched,
+  so the fix is to re-declare from that line. Matching trims each line
   (indentation and trailing whitespace are ignored, the text is not) and is
   otherwise exact — fuzzy matching stays a resolve-time-only mechanism. The
   region's length comes from `START:END` / `end` when given, else from the

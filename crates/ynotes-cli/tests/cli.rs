@@ -1697,6 +1697,30 @@ fn save_with_stale_coordinates_relocates_and_reports_the_corrected_range() {
     assert_eq!(parsed["data"]["scope"], "range");
 }
 
+#[test]
+fn save_with_stale_coordinates_marks_the_correction_on_the_human_line() {
+    // Same fixture as the `--json` test above; here the correction must be
+    // *called out*, not just visible in the range — a human who typed `2` and
+    // reads back `5:6` deserves the explanation inline.
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("f.txt"),
+        "one\ntwo\nthree\nfour\nfive\nsix\n",
+    )
+    .expect("write");
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.txt", "2", "--code", "five\nsix", "-m", "ctx"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("5:6 (corrected from line 2)"));
+}
+
 /// A `--code` quote absent from the file refuses with exit 2 (usage). Under
 /// `--json` that refusal must ride the v12 failure envelope on stdout — carrying
 /// the engine's Display text — not an empty stdout plus a stderr diagnostic.

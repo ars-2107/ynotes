@@ -83,6 +83,16 @@ fn run_inner(
         Some(code) => resolve_scope_verified(spec, code, &source)?,
         None => resolve_scope(spec, &source)?,
     };
+    // Presentational, not a re-derivation of the engine's verdict: any
+    // verified save that lands away from the declared start — stale
+    // coordinates relocated, or a blank-lead quote advancing the start — is
+    // worth flagging on the human line. "corrected", not "relocated":
+    // `relocated_from` is query vocabulary for a renamed *file*.
+    let corrected_from = match (code, spec) {
+        (Some(_), LineSpec::Line(n)) if n != range.start() => Some(n),
+        (Some(_), LineSpec::Range(r)) if r.start() != range.start() => Some(r.start()),
+        _ => None,
+    };
 
     let body = match message {
         Some(m) => m.to_owned(),
@@ -122,6 +132,9 @@ fn run_inner(
         } else {
             String::new()
         };
+        let corrected_clause = corrected_from
+            .map(|n| format!(" (corrected from line {n})"))
+            .unwrap_or_default();
         // Announce the zero-ceremony bootstrap on the human line: the first save
         // in a git repo just created the store, so name where it landed. The
         // `--json` branch above carries the same signal as `store_created`.
@@ -135,13 +148,14 @@ fn run_inner(
         };
         writeln!(
             out,
-            "{} {} note {} for {} {}:{}{}{}",
+            "{} {} note {} for {} {}:{}{}{}{}",
             if created { "saved" } else { "exists" },
             scope_word(scope),
             &note.id[..note.id.len().min(12)],
             target,
             range.start(),
             range.end(),
+            corrected_clause,
             superseded_clause,
             created_store_clause
         )?;

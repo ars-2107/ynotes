@@ -266,9 +266,19 @@ pub fn resolve_scope_verified(
     let end = origin + span - 1;
     let lines = u64::from(source.line_count());
     if end > lines {
-        return Err(Error::InvalidLocation(format!(
-            "line {end} is past the end of the file ({lines} lines)"
-        )));
+        // When the quote moved the region, `end` is a number the caller never
+        // passed — without the match line the message reads as noise (a
+        // declared `2:9` surfacing as "line 11"). Name where the quote
+        // matched so the correction is one step: re-declare from that line.
+        let msg = if origin == start {
+            format!("line {end} is past the end of the file ({lines} lines)")
+        } else {
+            format!(
+                "the quote matched at line {origin}, but the declared span ends at line {end}, \
+                 past the end of the file ({lines} lines)"
+            )
+        };
+        return Err(Error::InvalidLocation(msg));
     }
     // Both bounds are >= 1 and <= `lines` <= `u32::MAX`: exact conversions.
     let range = LineRange::new(
