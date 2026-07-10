@@ -65,6 +65,7 @@ cargo run --bin ynotes -- doctor --json              # machine-readable health c
 cargo run --bin ynotes -- completions zsh
 cargo run --bin ynotes -- init                       # create a .ynotes store (optional: the first save auto-creates one at the git root)
 cargo run --bin ynotes -- save src/lib.rs 40:78 -m "why this matters"
+cargo run --bin ynotes -- save src/lib.rs 40:78 --code "$(sed -n '40,44p' src/lib.rs)" -m "why this matters"  # quote-verified: stale line numbers are corrected
 cargo run --bin ynotes -- query src/lib.rs 50        # context overlapping line 50
 cargo run --bin ynotes -- query src/lib.rs --json    # machine-readable
 cargo run --bin ynotes -- query src/lib.rs 50 --explain  # show every rung
@@ -99,6 +100,16 @@ staged-only rename is deferred: the destination has no committed baseline yet, s
 `query` serves it meanwhile). The region must still be present at the new path —
 a rename that also deleted the region leaves the note `orphaned`, never welded
 onto the renamed file.
+
+A save can defend itself against stale coordinates too. Pass `--code` with
+the region's text (for the MCP tool, `code`) and the save verifies the line
+numbers against the file before anchoring: coordinates the quote corroborates
+save as given, stale ones are corrected when the quote matches exactly once
+elsewhere (the reported range is where the note actually landed), and a quote
+found nowhere — or ambiguously — refuses with a one-step recovery instead of
+anchoring to the wrong region. Agents read a file, edit it, and then save
+with line numbers that are no longer true; the quote is what makes those
+saves land on the right code.
 
 ## For coding agents (Claude Code, Codex, OpenCode, …)
 
@@ -139,7 +150,7 @@ the matching `--json` command:
 | tool | what it does | mirrors |
 |---|---|---|
 | `recall` | read the notes overlapping a file or line region; `count: true` for a cheap "is there context here?" check | `query` |
-| `remember` | save (or supersede) a note anchored to a region; bootstraps the store at the git root on first use | `save` |
+| `remember` | save (or supersede) a note anchored to a region; `code` (the region's text) verifies and corrects stale line numbers; bootstraps the store at the git root on first use | `save` |
 | `forget` | delete a note by id or unambiguous hex prefix; `dry_run` previews | `delete` |
 | `notes` | browse the store — one note by id, a body-substring search, the whole inventory, or `count: true` for a status breakdown | `list` / `show` / `lookup` |
 | `reanchor` | persist re-anchors for the notes that confidently moved; `dry_run` previews | `reanchor` |

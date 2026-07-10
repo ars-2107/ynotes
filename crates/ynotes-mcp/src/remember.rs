@@ -23,9 +23,16 @@ pub(crate) struct RememberArgs {
     /// Path to the file the context is about.
     pub(crate) file: String,
     /// 1-based first line; omit both bounds for a file-scoped note.
+    #[schemars(range(min = 1))]
     pub(crate) start: Option<u32>,
     /// 1-based last line; needs `start`.
+    #[schemars(range(min = 1))]
     pub(crate) end: Option<u32>,
+    /// The region's text, exactly as the file reads now. Verifies `start` and
+    /// corrects it when the line numbers went stale, so the note cannot land
+    /// on the wrong region. Requires `start`; the region's length comes from
+    /// `end` when given, else from the quote's line count.
+    pub(crate) code: Option<String>,
     /// The context text. Write for a reader who has not seen this session.
     pub(crate) body: String,
 }
@@ -68,7 +75,14 @@ pub(crate) fn run(args: &RememberArgs) -> CallToolResult {
         Ok(s) => s,
         Err(msg) => return tool_err("usage", msg),
     };
-    let (scope, range) = match ynotes::resolve_scope(spec, &source) {
+    // With `code`, the engine verifies the coordinates against the file
+    // (correcting stale ones) before anchoring; its refusals carry their own
+    // recovery text, passed through unchanged.
+    let resolved = match args.code.as_deref() {
+        Some(code) => ynotes::resolve_scope_verified(spec, code, &source),
+        None => ynotes::resolve_scope(spec, &source),
+    };
+    let (scope, range) = match resolved {
         Ok(pair) => pair,
         Err(e) => return tool_err("usage", e),
     };
@@ -117,6 +131,23 @@ mod tests {
             file: file.to_string_lossy().into_owned(),
             start,
             end,
+            code: None,
+            body: body.to_owned(),
+        }
+    }
+
+    fn args_with_code(
+        file: &Path,
+        start: Option<u32>,
+        end: Option<u32>,
+        code: &str,
+        body: &str,
+    ) -> RememberArgs {
+        RememberArgs {
+            file: file.to_string_lossy().into_owned(),
+            start,
+            end,
+            code: Some(code.to_owned()),
             body: body.to_owned(),
         }
     }
@@ -202,5 +233,66 @@ mod tests {
             "expected a usage error: {result:?}"
         );
         assert_eq!(text_of(&result), "usage: note body must not be empty");
+    }
+
+    #[test]
+    fn remember_with_stale_start_relocates_and_reports_the_corrected_range() {
+        let (_dir, file) = git_repo_no_store();
+        std::fs::write(&file, "one\ntwo\nthree\nfour\nfive\nsix\n").unwrap();
+        let result = run(&args_with_code(&file, Some(2), None, "five\nsix", "why"));
+        assert_ne!(result.is_error, Some(true), "unexpected error: {result:?}");
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        // The corrected location rides the payload's existing `range` field.
+        assert_eq!(v["range"], serde_json::json!([5, 6]));
+        assert_eq!(v["scope"], "range");
+    }
+
+    #[test]
+    fn remember_code_not_found_carries_the_reread_remedy() {
+        let (_dir, file) = git_repo_no_store();
+        let result = run(&args_with_code(&file, Some(1), None, "missing text", "why"));
+        assert_eq!(result.is_error, Some(true), "expected an error: {result:?}");
+        let text = text_of(&result);
+        assert!(
+            text.starts_with("usage:"),
+            "expected `usage:` prefix, got: {text}"
+        );
+        assert!(
+            text.contains("re-read the file"),
+            "expected the recovery, got: {text}"
+        );
+    }
+
+    #[test]
+    fn remember_ambiguous_code_lists_every_candidate() {
+        let (_dir, file) = git_repo_no_store();
+        std::fs::write(&file, "dup\nx\ndup\ny\n").unwrap();
+        let result = run(&args_with_code(&file, Some(4), None, "dup", "why"));
+        assert_eq!(result.is_error, Some(true), "expected an error: {result:?}");
+        let text = text_of(&result);
+        assert!(
+            text.starts_with("usage:"),
+            "expected `usage:` prefix, got: {text}"
+        );
+        assert!(
+            text.contains("lines 1, 3"),
+            "expected the candidates, got: {text}"
+        );
+        assert!(
+            text.contains("start matches none of them"),
+            "expected the diagnosis, got: {text}"
+        );
+    }
+
+    #[test]
+    fn remember_code_without_start_is_a_usage_error() {
+        let (_dir, file) = git_repo_no_store();
+        let result = run(&args_with_code(&file, None, None, "alpha", "why"));
+        assert_eq!(result.is_error, Some(true), "expected an error: {result:?}");
+        let text = text_of(&result);
+        assert!(
+            text.contains("requires a starting line"),
+            "expected the whole-file refusal, got: {text}"
+        );
     }
 }

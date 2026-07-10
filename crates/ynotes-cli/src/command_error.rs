@@ -80,7 +80,8 @@ pub(crate) enum CommandError {
 /// Classifies an engine error: most fall through to [`CommandError::Engine`]
 /// (exit `1`), but the user-input failures the engine exposes —
 /// [`ynotes::Error::OutsideStore`], [`ynotes::Error::InvalidLocation`],
-/// [`ynotes::Error::InvalidIdPrefix`], and [`ynotes::Error::SymlinkEscape`] —
+/// [`ynotes::Error::InvalidIdPrefix`], [`ynotes::Error::SymlinkEscape`],
+/// [`ynotes::Error::CodeNotFound`], and [`ynotes::Error::CodeAmbiguous`] —
 /// surface as [`CommandError::Usage`] (exit `2`). This is the single place
 /// that decision is made, so a fresh engine call only needs `?` to get the
 /// right classification.
@@ -90,7 +91,9 @@ impl From<ynotes::Error> for CommandError {
             ynotes::Error::OutsideStore { .. }
             | ynotes::Error::InvalidLocation(_)
             | ynotes::Error::InvalidIdPrefix(_)
-            | ynotes::Error::SymlinkEscape { .. } => CommandError::Usage(e.to_string()),
+            | ynotes::Error::SymlinkEscape { .. }
+            | ynotes::Error::CodeNotFound
+            | ynotes::Error::CodeAmbiguous { .. } => CommandError::Usage(e.to_string()),
             other => CommandError::Engine(other),
         }
     }

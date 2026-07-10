@@ -10,6 +10,23 @@ explicitly here.
 ## [Unreleased]
 
 ### Added
+- **Quote-verified saves**: `ynotes save` gains `--code <TEXT>` and the MCP
+  `remember` tool gains `code` — quote the region's text alongside the line
+  numbers and the save verifies the location against the file before
+  anchoring. Coordinates the quote corroborates save as given; stale
+  coordinates are corrected when the quote matches exactly once elsewhere
+  (the payload's `range` reports where the note landed); a quote found
+  nowhere, or at several places none of which is the declared start, refuses
+  with a typed usage error (`CodeNotFound` / `CodeAmbiguous`, exit `2`) whose
+  message carries the one-step recovery. Matching trims each line
+  (indentation and trailing whitespace are ignored, the text is not) and is
+  otherwise exact — fuzzy matching stays a resolve-time-only mechanism. The
+  region's length comes from `START:END` / `end` when given, else from the
+  quote's line count, so a long region needs only its opening lines quoted.
+  The `--json` / tool payload shape is unchanged (`saveData`, contract v12);
+  the MCP input schemas now advertise `code` and `minimum: 1` on
+  `start`/`end`, and the server instructions teach quote-anchored saves as
+  protocol step 3.
 - **`ynotes mcp`**: run ynotes as a stdio [MCP](https://modelcontextprotocol.io)
   server for agent clients (Claude Code, Codex, Cursor, …). Register it once
   (e.g. `claude mcp add ynotes -- ynotes mcp`) and the client spawns the process

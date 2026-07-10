@@ -78,6 +78,13 @@ async (`tokio`) enters only in `ynotes-mcp`, which calls the engine via
 - The binary's `command_error` module wraps failures in `CommandError`, whose
   only job is presentational: the user-facing message and the exit code
   (`2` usage, `1` otherwise).
+- Save-time anchoring is **exact-or-refuse**: a quote-verified save
+  (`--code` / MCP `code`) locates the quote by whitespace-trimmed, otherwise
+  exact line comparison, or refuses with a typed error (`CodeNotFound`,
+  `CodeAmbiguous`). Fuzzy matching is a resolve-time recovery mechanism with
+  an honest `drifted` verdict attached; a save has no verdict to attach, so a
+  fuzzily mislocated save would become permanent ground truth. Never reuse
+  the fuzzy rung at save time.
 
 Typed/matchable in the library; presentational/exit-coded in the binary.
 

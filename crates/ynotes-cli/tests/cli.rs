@@ -1604,3 +1604,134 @@ fn list_explain_surfaces_the_rung_vector() {
         serde_json::from_slice(&out.get_output().stdout).expect("valid JSON");
     assert!(v["data"]["notes"][0]["rungs"].is_array());
 }
+
+// `ynotes::Error` is `#[non_exhaustive]`, so a new engine variant compiles
+// clean even if `command_error`'s classify arm forgets it — and then exits
+// `1` instead of the usage `2`. These tests pin the classification.
+
+#[test]
+fn save_code_not_found_is_a_usage_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbeta\n").expect("write");
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.txt", "1", "--code", "gamma", "-m", "ctx"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("re-read the file"));
+}
+
+#[test]
+fn save_code_ambiguous_is_a_usage_error_listing_candidates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("f.txt"), "dup\nx\ndup\ny\n").expect("write");
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.txt", "4", "--code", "dup", "-m", "ctx"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("start matches none of them"))
+        .stderr(predicate::str::contains("lines 1, 3"));
+}
+
+#[test]
+fn save_code_without_a_location_is_rejected_at_parse_time() {
+    // clap's `requires = "at"`: a quote with nothing to verify is refused
+    // before the binary runs, at the standard usage exit code.
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("f.txt"), "alpha\n").expect("write");
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "f.txt", "--code", "alpha", "-m", "ctx"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("required"));
+}
+
+#[test]
+fn save_with_stale_coordinates_relocates_and_reports_the_corrected_range() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("f.txt"),
+        "one\ntwo\nthree\nfour\nfive\nsix\n",
+    )
+    .expect("write");
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args([
+            "save",
+            "f.txt",
+            "2",
+            "--code",
+            "five\nsix",
+            "-m",
+            "ctx",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).expect("utf8");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(parsed["success"], serde_json::json!(true));
+    // The corrected location is the payload's existing `range` field — the
+    // relocation is visible without any contract change.
+    assert_eq!(parsed["data"]["range"], serde_json::json!([5, 6]));
+    assert_eq!(parsed["data"]["scope"], "range");
+}
+
+/// A `--code` quote absent from the file refuses with exit 2 (usage). Under
+/// `--json` that refusal must ride the v12 failure envelope on stdout — carrying
+/// the engine's Display text — not an empty stdout plus a stderr diagnostic.
+#[test]
+fn save_code_not_found_under_json_emits_the_usage_failure_envelope() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbeta\n").expect("write");
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args([
+            "save", "f.txt", "1", "--code", "gamma", "-m", "ctx", "--json",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::is_empty())
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("valid JSON envelope on stdout");
+    assert_eq!(parsed["success"], serde_json::json!(false));
+    assert_eq!(parsed["v"], serde_json::json!(12));
+    assert_eq!(parsed["type"], serde_json::json!("usage"));
+    assert!(
+        parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("re-read the file"),
+        "the engine's Display text must ride the envelope: {parsed:?}"
+    );
+}

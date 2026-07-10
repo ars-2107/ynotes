@@ -38,9 +38,16 @@ pub(crate) fn dispatch(cli: &Cli) -> Result<(), CommandError> {
         Command::Save {
             file,
             at,
+            code,
             message,
             json,
-        } => save::run(file, at.as_deref(), message.as_deref(), *json),
+        } => save::run(
+            file,
+            at.as_deref(),
+            code.as_deref(),
+            message.as_deref(),
+            *json,
+        ),
         Command::Query {
             file,
             at,
