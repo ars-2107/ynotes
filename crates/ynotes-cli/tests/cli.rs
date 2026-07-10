@@ -1696,3 +1696,42 @@ fn save_with_stale_coordinates_relocates_and_reports_the_corrected_range() {
     assert_eq!(parsed["data"]["range"], serde_json::json!([5, 6]));
     assert_eq!(parsed["data"]["scope"], "range");
 }
+
+/// A `--code` quote absent from the file refuses with exit 2 (usage). Under
+/// `--json` that refusal must ride the v12 failure envelope on stdout — carrying
+/// the engine's Display text — not an empty stdout plus a stderr diagnostic.
+#[test]
+fn save_code_not_found_under_json_emits_the_usage_failure_envelope() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    std::fs::write(dir.path().join("f.txt"), "alpha\nbeta\n").expect("write");
+    let out = ynotes()
+        .current_dir(dir.path())
+        .args([
+            "save", "f.txt", "1", "--code", "gamma", "-m", "ctx", "--json",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::is_empty())
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("valid JSON envelope on stdout");
+    assert_eq!(parsed["success"], serde_json::json!(false));
+    assert_eq!(parsed["v"], serde_json::json!(12));
+    assert_eq!(parsed["type"], serde_json::json!("usage"));
+    assert!(
+        parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("re-read the file"),
+        "the engine's Display text must ride the envelope: {parsed:?}"
+    );
+}
