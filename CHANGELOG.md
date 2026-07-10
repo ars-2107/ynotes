@@ -9,6 +9,8 @@ explicitly here.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-10
+
 ### Added
 - **Quote-verified saves**: `ynotes save` gains `--code <TEXT>` and the MCP
   `remember` tool gains `code` — quote the region's text alongside the line
@@ -680,4 +682,5 @@ explicitly here.
   message distinguishes "no notes under `<dir>`" from "no notes in this
   store".
 
-[Unreleased]: https://github.com/ars-2107/ynotes/commits/main
+[Unreleased]: https://github.com/ars-2107/ynotes/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ars-2107/ynotes/releases/tag/v0.1.0
