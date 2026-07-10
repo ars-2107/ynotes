@@ -30,13 +30,25 @@ fn display_io_error(path: &Path, source: &std::io::Error) -> String {
 /// surface flattens the variant to this string, so the message is the whole
 /// recovery protocol at the point of failure.
 fn display_code_ambiguous(lines: &[u32]) -> String {
+    // Cap the roll-call: a one-line quote in a big file can match hundreds of
+    // places, and past a point the list stops aiding recovery and starts
+    // burying the instruction after it. The typed variant keeps every
+    // candidate; only the rendering is capped.
+    const LISTED: usize = 10;
     let joined = lines
         .iter()
+        .take(LISTED)
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join(", ");
+    let more = lines.len().saturating_sub(LISTED);
+    let listed = if more > 0 {
+        format!("{joined}, and {more} more")
+    } else {
+        joined
+    };
     format!(
-        "the quoted code occurs {} times (lines {joined}) and start matches none of them; \
+        "the quoted code occurs {} times (lines {listed}) and start matches none of them; \
          correct start, or quote more surrounding lines",
         lines.len()
     )

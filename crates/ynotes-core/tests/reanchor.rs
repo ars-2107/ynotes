@@ -10,9 +10,13 @@ use std::path::Path;
 use std::process::Command;
 
 use ynotes::{
-    GitContext, LineRange, Note, ReanchorSkipReason, Rung, RungResult, Scope, SelectorBundle,
-    SourceFile, Store, reanchor, resolve,
+    GitContext, LineRange, Note, Rung, RungResult, Scope, SelectorBundle, SourceFile, Store,
+    reanchor, resolve,
 };
+// Only the unix-gated read-only-store test matches on skip reasons; importing
+// this unconditionally is an unused-import error on Windows under -D warnings.
+#[cfg(unix)]
+use ynotes::ReanchorSkipReason;
 
 /// Saves a Range note for `range` of the file at `abs`.
 fn save_note(store: &Store, abs: &Path, range: LineRange, body: &str) -> Note {

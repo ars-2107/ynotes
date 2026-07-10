@@ -236,5 +236,6 @@ jobs:
           persist-credentials: false
       # pipx is preinstalled on GitHub-hosted runners. zizmor audits these
       # workflow files for the injection/misconfiguration classes the local
-      # pre-commit guard also flags.
-      - run: pipx run zizmor .
+      # pre-commit guard also flags. Pinned so a new zizmor release cannot
+      # change this job's verdict mid-flight; bump deliberately.
+      - run: pipx run zizmor==1.26.1 .
