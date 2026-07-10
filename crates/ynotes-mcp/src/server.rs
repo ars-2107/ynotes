@@ -44,7 +44,7 @@ impl YnotesServer {
     }
     /// See spec §5.2 — description text verbatim from the design doc.
     #[tool(
-        description = "Save a context note anchored to a code region, committed to the repo and shared with the team. Save the why, not the what: constraints, invariants, gotchas, cross-file couplings, rejected approaches. Only save what would surprise a competent reader in three months - never what the code plainly shows. Anchor to the smallest region the context is about (omit start/end for a whole-file note). Saving to the same location supersedes the note there - this is also how you correct one. Creates the note store at the repo root on first use.",
+        description = "Save a context note anchored to a code region, committed to the repo and shared with the team. Save the why, not the what: constraints, invariants, gotchas, cross-file couplings, rejected approaches. Only save what would surprise a competent reader in three months - never what the code plainly shows. Anchor to the smallest region the context is about (omit start/end for a whole-file note). Pass code (the region's text exactly as the file reads now) alongside start: stale line numbers are then verified and corrected, so the note cannot land on the wrong region. Saving to the same location supersedes the note there - this is also how you correct one. Creates the note store at the repo root on first use.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,

@@ -21,8 +21,10 @@ pub(crate) struct RecallArgs {
     /// Path to the file, relative to the repo root or absolute.
     pub(crate) file: String,
     /// 1-based first line; omit with `end` for the whole file.
+    #[schemars(range(min = 1))]
     pub(crate) start: Option<u32>,
     /// 1-based last line; needs `start`; omit for a single line.
+    #[schemars(range(min = 1))]
     pub(crate) end: Option<u32>,
     /// Return only the status breakdown (cheap existence check).
     pub(crate) count: Option<bool>,

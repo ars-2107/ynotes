@@ -112,7 +112,7 @@ expression: tools
           "end": {
             "description": "1-based last line; needs `start`; omit for a single line.",
             "format": "uint32",
-            "minimum": 0,
+            "minimum": 1,
             "type": [
               "integer",
               "null"
@@ -125,7 +125,7 @@ expression: tools
           "start": {
             "description": "1-based first line; omit with `end` for the whole file.",
             "format": "uint32",
-            "minimum": 0,
+            "minimum": 1,
             "type": [
               "integer",
               "null"
@@ -146,7 +146,7 @@ expression: tools
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Save a context note anchored to a code region, committed to the repo and shared with the team. Save the why, not the what: constraints, invariants, gotchas, cross-file couplings, rejected approaches. Only save what would surprise a competent reader in three months - never what the code plainly shows. Anchor to the smallest region the context is about (omit start/end for a whole-file note). Saving to the same location supersedes the note there - this is also how you correct one. Creates the note store at the repo root on first use.",
+      "description": "Save a context note anchored to a code region, committed to the repo and shared with the team. Save the why, not the what: constraints, invariants, gotchas, cross-file couplings, rejected approaches. Only save what would surprise a competent reader in three months - never what the code plainly shows. Anchor to the smallest region the context is about (omit start/end for a whole-file note). Pass code (the region's text exactly as the file reads now) alongside start: stale line numbers are then verified and corrected, so the note cannot land on the wrong region. Saving to the same location supersedes the note there - this is also how you correct one. Creates the note store at the repo root on first use.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -154,10 +154,17 @@ expression: tools
             "description": "The context text. Write for a reader who has not seen this session.",
             "type": "string"
           },
+          "code": {
+            "description": "The region's text, exactly as the file reads now. Verifies `start` and\ncorrects it when the line numbers went stale, so the note cannot land\non the wrong region. Requires `start`; the region's length comes from\n`end` when given, else from the quote's line count.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "end": {
             "description": "1-based last line; needs `start`.",
             "format": "uint32",
-            "minimum": 0,
+            "minimum": 1,
             "type": [
               "integer",
               "null"
@@ -170,7 +177,7 @@ expression: tools
           "start": {
             "description": "1-based first line; omit both bounds for a file-scoped note.",
             "format": "uint32",
-            "minimum": 0,
+            "minimum": 1,
             "type": [
               "integer",
               "null"
