@@ -1,0 +1,14 @@
+# Formatting/linting for TOML (Cargo.toml and friends). rustfmt only covers
+# Rust; without this nothing keeps the manifests consistent.
+#
+# First-run note: like `cargo fmt`, run `taplo fmt` once so the existing,
+# hand-formatted Cargo.toml matches these rules before CI's `--check` runs.
+
+[formatting]
+# Preserve intentional key and array ordering, the manifests are grouped and
+# commented deliberately; alphabetising them would destroy that structure.
+reorder_keys = false
+reorder_arrays = false
+align_entries = false
+column_width = 100
+indent_string = "    "

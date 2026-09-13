@@ -1,0 +1,13 @@
+{
+  "name": "ynotes-win32-x64",
+  "version": "0.1.0",
+  "description": "The ynotes CLI binary for Windows x64. Installed automatically as an optionalDependency of `ynotes`.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ars-2107/ynotes.git"
+  },
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["bin/", "LICENSE"]
+}

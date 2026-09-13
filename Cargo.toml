@@ -1,0 +1,76 @@
+# Shared engine and CLI/MCP adapters. See AGENTS.md for crate boundaries.
+
+[workspace]
+resolver = "3"
+members = ["crates/ynotes-core", "crates/ynotes-cli", "crates/ynotes-mcp"]
+
+# Shared package metadata. Each member inherits these with `field.workspace =
+# true`, so version, MSRV and licence live in one place.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# The locked derive dependencies and let-chain syntax require 1.88.
+# Keep in sync with clippy.toml and the `msrv` CI job.
+rust-version = "1.88"
+description = "Store code context that survives edits, and return only the context a query overlaps."
+license = "MIT"
+repository = "https://github.com/ars-2107/ynotes"
+homepage = "https://github.com/ars-2107/ynotes"
+authors = ["ynotes contributors"]
+keywords = ["cli", "context", "annotations", "agents", "code"]
+categories = ["command-line-utilities", "development-tools"]
+
+# Lints. CI runs clippy with `-D warnings`, so every "warn" is a hard gate in
+# CI while staying non-blocking for local iteration. Each member opts in with
+# `[lints] workspace = true`.
+[workspace.lints.rust]
+# ynotes needs no `unsafe`. Forbid (not deny) so it cannot be re-enabled with
+# a local `#[allow]`.
+unsafe_code = "forbid"
+# Documentation is part of the public API, see the comment doctrine in
+# AGENTS.md.
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+let_underscore_drop = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that are more noise than signal for a CLI of this size.
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+# Shared dependencies are pinned here and referenced with
+# `dep.workspace = true`; crate-specific deps stay in each member's manifest.
+[workspace.dependencies]
+# Note records and the by-path index are JSON (machine artefacts like
+# `.git/objects`).
+serde = { version = "1", features = ["derive"] }
+# Preserve struct field order through Value so MCP JSON text matches direct
+# serialisation, including partial-failure responses.
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+tracing = "0.1"
+
+# --- Build profiles -------------------------------------------------------------
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "debuginfo"
+
+# Optimise dependencies even in debug builds: a one-off cost that buys much
+# faster test/debug runs.
+[profile.dev.package."*"]
+opt-level = 3
+codegen-units = 1
+debug = "line-tables-only"
+
+# Ephemeral CI runners gain nothing from debuginfo or incremental artefacts.
+[profile.ci]
+inherits = "dev"
+debug = false
+incremental = false

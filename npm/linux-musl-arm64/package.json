@@ -1,0 +1,14 @@
+{
+  "name": "ynotes-linux-musl-arm64",
+  "version": "0.1.0",
+  "description": "The ynotes CLI binary for Linux arm64 (musl, e.g. Alpine). Installed automatically as an optionalDependency of `ynotes`.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ars-2107/ynotes.git"
+  },
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "libc": ["musl"],
+  "files": ["bin/", "LICENSE"]
+}

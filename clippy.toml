@@ -1,0 +1,4 @@
+# Tell clippy the Minimum Supported Rust Version so that lints suggesting newer
+# APIs stay quiet until the MSRV moves. Keep in sync with `rust-version` in
+# Cargo.toml and the `msrv` CI job.
+msrv = "1.88"

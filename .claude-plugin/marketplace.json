@@ -1,0 +1,14 @@
+{
+  "name": "ynotes",
+  "description": "Store context on code regions and retrieve it by file or line range.",
+  "owner": {
+    "name": "ars-2107"
+  },
+  "plugins": [
+    {
+      "name": "ynotes",
+      "source": "./",
+      "description": "Code-anchored context notes for agents: recall before editing, remember after work."
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+# Rust build artefacts.
+/target/
+# rustfmt backups.
+**/*.rs.bk
+# MSVC debugger symbols (Windows builds).
+*.pdb
+
+# Cargo.lock is intentionally NOT ignored: ynotes ships a binary, so the
+# lockfile is part of the reproducible build.
+
+# insta pending/rejected snapshots, reviewed and accepted with `cargo insta`.
+*.pending-snap
+*.snap.new
+
+# `cargo build --timings` reports.
+cargo-timing*.html
+# ctags output.
+tags
+
+# npm distribution. Per-platform `package.json` manifests are committed; the
+# binaries dropped into `npm/*/bin/` at release time are not.
+/npm/*/bin/
+/npm/*/LICENSE
+node_modules/
+*.tgz
+
+/.opensrc/
+
+# Local working docs (TODO, scratch planning). The committed docs live at the
+# repo root; `/docs/` is private scratch space.
+/docs/
+
+# Editors & OS noise.
+.idea/
+.vscode/
+.zed/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

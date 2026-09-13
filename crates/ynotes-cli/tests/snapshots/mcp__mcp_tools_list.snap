@@ -1,0 +1,1681 @@
+---
+source: crates/ynotes-cli/tests/mcp.rs
+expression: tools
+---
+{
+  "tools": [
+    {
+      "name": "confirm",
+      "description": "Mark one note as reviewed against its currently resolved code. Requires root: the absolute repository path. Use only after checking that the note body is still true. Reanchor refreshes selectors but deliberately leaves edited context drifted; confirm is the explicit acknowledgement that restores anchored. A region that cannot be identified is refused: an orphan, or one located only by similarity rather than by git transport, an exact quote, or its structural path. Call reanchor first in that case, then confirm.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "root",
+          "id"
+        ],
+        "properties": {
+          "root": {
+            "description": "Absolute path to the repository root this request addresses.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Full note id or an unambiguous hexadecimal prefix of at least 4 chars.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "$ref": "#/$defs/confirmData",
+        "$defs": {
+          "confirmData": {
+            "type": "object",
+            "title": "confirm --json data",
+            "description": "Payload for `ynotes confirm --json`: the note whose body was explicitly reviewed against current code. Confirmation advances the independent review basis and is the only body-preserving operation that can clear stale context after an edit.",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "previous_id",
+              "target",
+              "scope",
+              "range",
+              "changed",
+              "created"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/noteId"
+              },
+              "previous_id": {
+                "$ref": "#/$defs/noteId"
+              },
+              "target": {
+                "$ref": "#/$defs/target"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "range": {
+                "$ref": "#/$defs/lineRange",
+                "description": "The current code region against which the note body was reviewed."
+              },
+              "changed": {
+                "type": "boolean",
+                "description": "true when advancing the review basis changed the note's content-addressed identity."
+              },
+              "created": {
+                "type": "boolean",
+                "description": "true when confirmation wrote a new note record."
+              }
+            }
+          },
+          "lineRange": {
+            "type": "array",
+            "description": "An inclusive line range [start, end], 1-based.",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "range",
+              "file"
+            ],
+            "description": "A contiguous line range or the whole file. A single-line note uses range with equal endpoints. The stored scope retains its original variant for ID compatibility."
+          },
+          "target": {
+            "type": "string",
+            "description": "The note's target file, relative to the store's work tree, with forward slashes."
+          },
+          "noteId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Content-addressed note id: the SHA-256, hex-encoded, of (target, scope, bundle, review basis, body). Deterministic, no timestamp or randomness. **Rotates on reanchor, update, and confirm** when one of those hash inputs changes. To cache a stable handle to a note across maintenance, use the (target, scope, body) tuple rather than the id."
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "files",
+      "description": "List which files in the repository carry notes, and how many each has. Requires root: the absolute repository path. Call this once when you start work in a repository: recall is otherwise a guess, and knowing which files are annotated is what makes it worth calling on the ones that are. Existing targets need only records and path checks. Missing targets use corroborated Git renames; unresolved notes keep their historical path. Reads never write. Returns no line numbers and no statuses on purpose: those would be stored values, not facts about current code. Use recall for what a note says and where it is now. Files come most-annotated first. Returns {\"store\":\"absent\"} when the repo has no note store.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "root"
+        ],
+        "properties": {
+          "root": {
+            "description": "Absolute path to the repository root this request addresses.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/filesData"
+          },
+          {
+            "$ref": "#/$defs/storeAbsent"
+          }
+        ],
+        "$defs": {
+          "storeAbsent": {
+            "type": "object",
+            "title": "Store absent",
+            "description": "Successful absent-store result for CLI files and MCP files, recall, notes, or reanchor. Does not create a store.",
+            "additionalProperties": false,
+            "required": [
+              "store"
+            ],
+            "properties": {
+              "store": {
+                "const": "absent"
+              }
+            }
+          },
+          "filesData": {
+            "type": "object",
+            "title": "files --json data",
+            "description": "Annotated paths and counts, ordered by descending count then path. Existing targets need records and path checks; missing targets use content-corroborated Git rename detection. Unlocatable notes retain historical paths. Read-only. Ranges and statuses are omitted because not every note is resolved; use query or list for those.",
+            "additionalProperties": false,
+            "required": [
+              "files",
+              "total",
+              "malformed",
+              "index"
+            ],
+            "properties": {
+              "files": {
+                "type": "array",
+                "description": "Annotated files, most-annotated first. Empty on a store with no notes.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "target",
+                    "notes"
+                  ],
+                  "properties": {
+                    "target": {
+                      "$ref": "#/$defs/target"
+                    },
+                    "notes": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "How many notes are stored against this file."
+                    }
+                  }
+                }
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total notes across every file, the sum of `files[].notes`."
+              },
+              "malformed": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many records under `notes/` could not be read or parsed. A count, not a list: `doctor` and `reindex` report the specifics."
+              },
+              "index": {
+                "$ref": "#/$defs/indexHealth"
+              }
+            }
+          },
+          "indexHealth": {
+            "type": "object",
+            "title": "index cache health",
+            "description": "Readability and identity drift of the rebuildable by-path cache observed while serving a read. Reads report this state but never repair it.",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "recovered",
+              "dangling"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "healthy",
+                  "missing",
+                  "malformed"
+                ],
+                "description": "Whether the index parsed successfully, was absent, or was malformed."
+              },
+              "recovered": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Record ids present on disk but absent from the index."
+              },
+              "dangling": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Index ids with no record file behind them."
+              }
+            }
+          },
+          "target": {
+            "type": "string",
+            "description": "The note's target file, relative to the store's work tree, with forward slashes."
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "forget",
+      "description": "Delete a note by id. Requires root: the absolute repository path. Use when a note is wrong, obsolete, or noise. To correct a note, prefer remember at the same location (it supersedes). dry_run previews. A corrupt/unreadable record is removable only by its exact 64-character id.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "root",
+          "id"
+        ],
+        "properties": {
+          "root": {
+            "description": "Absolute path to the repository root this request addresses.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Full 64-char note id, or an unambiguous hex prefix of >= 4 characters\n(recall/notes results carry full ids).",
+            "type": "string"
+          },
+          "dry_run": {
+            "description": "Preview without deleting.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "$ref": "#/$defs/deleteData",
+        "$defs": {
+          "deleteData": {
+            "type": "object",
+            "title": "delete --json data",
+            "description": "Per-ID deletion outcomes, partitioned into deleted, deleted_unreadable, ambiguous, and not_found. All arrays are present. Nonempty ambiguous or not_found produces exit 1 despite success: true. An unreadable record purged by full ID is a successful deletion. Inspect the partitions to determine complete success.",
+            "additionalProperties": false,
+            "required": [
+              "requested",
+              "deleted",
+              "deleted_unreadable",
+              "ambiguous",
+              "not_found",
+              "dry_run"
+            ],
+            "properties": {
+              "requested": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many ids the caller passed."
+              },
+              "deleted": {
+                "type": "array",
+                "description": "Notes that were removed (or, under `dry_run`, would be).",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "requested",
+                    "id",
+                    "target",
+                    "scope",
+                    "range",
+                    "body_excerpt"
+                  ],
+                  "properties": {
+                    "requested": {
+                      "type": "string",
+                      "description": "The id-or-prefix the caller passed."
+                    },
+                    "id": {
+                      "$ref": "#/$defs/noteId"
+                    },
+                    "target": {
+                      "$ref": "#/$defs/target"
+                    },
+                    "scope": {
+                      "$ref": "#/$defs/scope"
+                    },
+                    "range": {
+                      "$ref": "#/$defs/lineRange"
+                    },
+                    "body_excerpt": {
+                      "type": "string",
+                      "description": "The first line of the body, truncated at 80 characters with `…`. Useful as a confirmation; not the whole body."
+                    }
+                  }
+                }
+              },
+              "deleted_unreadable": {
+                "type": "array",
+                "description": "Ids of corrupt records purged by exact id (or, under `dry_run`, that would be). A malformed record cannot be read to supply a target/scope/body, so only its id is reported. Removal requires the full 64-character id, a short prefix can never purge an unreadable record (there is no body to preview, and a prefix could otherwise catch a healthy note). An entry here is a success, not a partial failure: it does not flip the exit code.",
+                "items": {
+                  "$ref": "#/$defs/noteId"
+                }
+              },
+              "ambiguous": {
+                "type": "array",
+                "description": "Prefixes that matched more than one note. None of the candidates are deleted (we never silently delete multiple matches for a single requested id).",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "requested",
+                    "candidates"
+                  ],
+                  "properties": {
+                    "requested": {
+                      "type": "string"
+                    },
+                    "candidates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/noteId"
+                      }
+                    }
+                  }
+                }
+              },
+              "not_found": {
+                "type": "array",
+                "description": "Prefixes that matched no note in the store.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "dry_run": {
+                "type": "boolean",
+                "description": "true when invoked with `--dry-run`, nothing was actually removed."
+              }
+            }
+          },
+          "noteId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Content-addressed note id: the SHA-256, hex-encoded, of (target, scope, bundle, review basis, body). Deterministic, no timestamp or randomness. **Rotates on reanchor, update, and confirm** when one of those hash inputs changes. To cache a stable handle to a note across maintenance, use the (target, scope, body) tuple rather than the id."
+          },
+          "lineRange": {
+            "type": "array",
+            "description": "An inclusive line range [start, end], 1-based.",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "range",
+              "file"
+            ],
+            "description": "A contiguous line range or the whole file. A single-line note uses range with equal endpoints. The stored scope retains its original variant for ID compatibility."
+          },
+          "target": {
+            "type": "string",
+            "description": "The note's target file, relative to the store's work tree, with forward slashes."
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "notes",
+      "description": "Browse the note store: one note by id, search bodies by substring, or list every note with its current anchor status. Requires root: the absolute repository path. For notes on a specific file or region use recall. count: true gives a store-wide status breakdown. Returns {\"store\":\"absent\"} when the repo has no note store.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "root"
+        ],
+        "properties": {
+          "root": {
+            "description": "Absolute path to the repository root this request addresses.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Fetch exactly one note: full id or unambiguous >= 4-char hex prefix.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body_contains": {
+            "description": "Search note bodies for this substring (case-sensitive).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "description": "Whole-store status breakdown instead of note bodies.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/showData"
+          },
+          {
+            "$ref": "#/$defs/lookupData"
+          },
+          {
+            "$ref": "#/$defs/listData"
+          },
+          {
+            "$ref": "#/$defs/listCountData"
+          },
+          {
+            "$ref": "#/$defs/storeAbsent"
+          }
+        ],
+        "$defs": {
+          "storeAbsent": {
+            "type": "object",
+            "title": "Store absent",
+            "description": "Successful absent-store result for CLI files and MCP files, recall, notes, or reanchor. Does not create a store.",
+            "additionalProperties": false,
+            "required": [
+              "store"
+            ],
+            "properties": {
+              "store": {
+                "const": "absent"
+              }
+            }
+          },
+          "listCountData": {
+            "type": "object",
+            "title": "list --count --json data",
+            "description": "Payload for `ynotes list --count --json`: the status breakdown across the listed set in place of the notes. Distinguished from `listData` by carrying `count` (not `notes`); `malformed` here is a count, not an array.",
+            "additionalProperties": false,
+            "required": [
+              "count",
+              "malformed",
+              "index",
+              "warnings"
+            ],
+            "properties": {
+              "count": {
+                "$ref": "#/$defs/countBreakdown"
+              },
+              "malformed": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many records under notes/ could not be read or parsed, the count-mode analogue of `listData.malformed[]` (invariant #4)."
+              },
+              "index": {
+                "$ref": "#/$defs/indexHealth"
+              },
+              "warnings": {
+                "type": "array",
+                "description": "Non-fatal advisories, populated when a path filter matched nothing. Always present; empty when there is nothing to flag.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "indexHealth": {
+            "type": "object",
+            "title": "index cache health",
+            "description": "Readability and identity drift of the rebuildable by-path cache observed while serving a read. Reads report this state but never repair it.",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "recovered",
+              "dangling"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "healthy",
+                  "missing",
+                  "malformed"
+                ],
+                "description": "Whether the index parsed successfully, was absent, or was malformed."
+              },
+              "recovered": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Record ids present on disk but absent from the index."
+              },
+              "dangling": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Index ids with no record file behind them."
+              }
+            }
+          },
+          "countBreakdown": {
+            "type": "object",
+            "title": "status breakdown",
+            "description": "A tally of resolved notes by anchor status, emitted by `--count` summary mode in place of the note bodies. `total` equals `anchored + drifted + orphaned`.",
+            "additionalProperties": false,
+            "required": [
+              "total",
+              "anchored",
+              "drifted",
+              "orphaned"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "anchored": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Notes located and intact."
+              },
+              "drifted": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Notes located but moved or edited."
+              },
+              "orphaned": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Notes no content rung could locate."
+              }
+            }
+          },
+          "listData": {
+            "type": "object",
+            "title": "list --json data",
+            "description": "Payload for `ynotes list --json`: every note in the store with its current anchor status.",
+            "additionalProperties": false,
+            "required": [
+              "notes",
+              "malformed",
+              "index",
+              "warnings"
+            ],
+            "properties": {
+              "notes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/note"
+                }
+              },
+              "malformed": {
+                "type": "array",
+                "description": "Records under notes/ that could not be read or parsed. Skipped from `notes` because they cannot be resolved, but surfaced so corruption is never hidden (invariant #4). A filtered inventory retains unknown-target records because excluding them would assume what cannot be read. Always present; empty when there is nothing to flag.",
+                "items": {
+                  "$ref": "#/$defs/malformedNote"
+                }
+              },
+              "index": {
+                "$ref": "#/$defs/indexHealth"
+              },
+              "warnings": {
+                "type": "array",
+                "description": "Non-fatal advisories, populated when a path filter (`list <file>` or `list <dir>`) matched nothing, distinguishing 'this filter is empty' from 'the store is empty'. With no filter, an empty `notes` array is self-explanatory and `warnings` stays empty. Always present.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "malformedNote": {
+            "type": "object",
+            "title": "Malformed note record",
+            "description": "A record under notes/ that could not be read or parsed as a note. Surfaced by read paths even when it is absent from the index, so corruption is never hidden (invariant #4).",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "target",
+              "path",
+              "error"
+            ],
+            "properties": {
+              "id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/noteId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The id encoded by a canonical record path, or null for an irregular filename."
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/target"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The cached target, or null when an unindexed malformed record has no readable source for it."
+              },
+              "path": {
+                "type": "string",
+                "description": "Store-relative path to the unreadable record."
+              },
+              "error": {
+                "type": "string",
+                "description": "Why the record could not be read or parsed. Free-form, for display, branch on an entry being present, not on this text."
+              }
+            }
+          },
+          "target": {
+            "type": "string",
+            "description": "The note's target file, relative to the store's work tree, with forward slashes."
+          },
+          "noteId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Content-addressed note id: the SHA-256, hex-encoded, of (target, scope, bundle, review basis, body). Deterministic, no timestamp or randomness. **Rotates on reanchor, update, and confirm** when one of those hash inputs changes. To cache a stable handle to a note across maintenance, use the (target, scope, body) tuple rather than the id."
+          },
+          "note": {
+            "type": "object",
+            "title": "Resolved note",
+            "description": "A stored note resolved against the current file.",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "target",
+              "scope",
+              "status",
+              "stale",
+              "resolved_range",
+              "body"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/noteId"
+              },
+              "target": {
+                "$ref": "#/$defs/target"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "anchored",
+                  "drifted",
+                  "orphaned"
+                ],
+                "description": "anchored: region located and intact against its review basis. drifted: located, but moved or differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
+              },
+              "stale": {
+                "type": "boolean",
+                "description": "Agent convenience: false only for an anchored note; true for drifted or orphaned. A pure function of status, provided so an agent can branch on one boolean."
+              },
+              "resolved_range": {
+                "description": "Where the note resolved to in the current file, or null for an orphan.",
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/lineRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "previous_range": {
+                "$ref": "#/$defs/lineRange",
+                "description": "Present only for a drifted or orphaned note: the range it occupied before it moved or was lost."
+              },
+              "relocated_from": {
+                "type": "string",
+                "description": "Present when a note resolves through a file rename but is still stored under its pre-rename target. Pair with `relocated_to` for both sides of the pending migration; `reanchor` makes it durable."
+              },
+              "relocated_to": {
+                "type": "string",
+                "description": "Present with `relocated_from`: the current path where the note's region was content-corroborated. This lets `list`, `query`, and MCP inventories surface a pending rename without writing."
+              },
+              "body": {
+                "type": "string",
+                "description": "The note's context text."
+              },
+              "rungs": {
+                "type": "array",
+                "description": "Present only with --explain: each selector-ladder rung's outcome (the agreement vector).",
+                "items": {
+                  "$ref": "#/$defs/rung"
+                }
+              }
+            }
+          },
+          "rung": {
+            "type": "object",
+            "title": "Rung outcome",
+            "description": "One matching method's evidence. Scores are method-specific diagnostics in [0, 100], not a combined confidence. See ynotes skills get core --full for the scoring reference.",
+            "additionalProperties": false,
+            "required": [
+              "rung",
+              "result"
+            ],
+            "properties": {
+              "rung": {
+                "type": "string",
+                "enum": [
+                  "git",
+                  "quote",
+                  "structural",
+                  "fuzzy",
+                  "position"
+                ],
+                "description": "Which rung: git transport (R1), exact quote (R2), fuzzy alignment (R3), tree-sitter structure (R4), saved position (R5)."
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "hit",
+                  "miss",
+                  "skipped"
+                ],
+                "description": "hit: located the region. miss: ran but found nothing. skipped: could not run (e.g. not a git repo) and is not held against the result."
+              },
+              "range": {
+                "$ref": "#/$defs/lineRange",
+                "description": "Present only on a hit: where this rung believes the region now is."
+              },
+              "score": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100,
+                "description": "Present only on a hit: the rung's own confidence in its range. Scale per rung, git: 100 unchanged / 90 moved-untouched / 70 moved-touched; quote: 95 exact text still at the saved position / 90 disambiguated by prefix-suffix context, or unique at capture and still unique / 55 ambiguous or unverified; structural: 55–95 (95 = identical fingerprint); fuzzy: 45–80 (capped below 90, fuzzy alone never anchors); position: 20 in-range / 10 clamped (diagnostic only, never consulted by the verdict)."
+              }
+            }
+          },
+          "lineRange": {
+            "type": "array",
+            "description": "An inclusive line range [start, end], 1-based.",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "range",
+              "file"
+            ],
+            "description": "A contiguous line range or the whole file. A single-line note uses range with equal endpoints. The stored scope retains its original variant for ID compatibility."
+          },
+          "lookupData": {
+            "type": "object",
+            "title": "lookup --json data",
+            "description": "Payload for `ynotes lookup --json`: the notes matching a stable (target, body) handle, each with its current id and anchor status. Use this to re-derive a note's live id, which rotates on reanchor/update.",
+            "additionalProperties": false,
+            "required": [
+              "notes"
+            ],
+            "properties": {
+              "notes": {
+                "type": "array",
+                "description": "Every note matching the lookup filters, in list order. Empty when nothing matched (exit 0).",
+                "items": {
+                  "$ref": "#/$defs/note"
+                }
+              }
+            }
+          },
+          "showData": {
+            "type": "object",
+            "title": "show --json data",
+            "description": "One note selected by ID or unambiguous prefix, resolved against current code with the same rename corroboration as query and list.",
+            "additionalProperties": false,
+            "required": [
+              "note",
+              "warnings"
+            ],
+            "properties": {
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "warnings": {
+                "type": "array",
+                "description": "Non-fatal advisories, populated, for example, when the note's target file does not exist on disk (the note then resolves `orphaned`). Always present; empty when there is nothing to flag.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "reanchor",
+      "description": "Persist re-anchors for every note that confidently moved: refreshes selectors, follows committed file renames, collapses merge duplicates. Requires root: the absolute repository path. Run after work that moved or heavily edited annotated code, or when recall shows drifted notes. Never touches orphaned notes. review_pending lists notes already anchored correctly whose bodies are still unreviewed - confirm each after checking it. dry_run previews. Returns {\"store\":\"absent\"} when the repo has no note store.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "root"
+        ],
+        "properties": {
+          "root": {
+            "description": "Absolute path to the repository root this request addresses.",
+            "type": "string"
+          },
+          "dry_run": {
+            "description": "Preview the pass without writing anything.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/reanchorData"
+          },
+          {
+            "$ref": "#/$defs/storeAbsent"
+          }
+        ],
+        "$defs": {
+          "storeAbsent": {
+            "type": "object",
+            "title": "Store absent",
+            "description": "Successful absent-store result for CLI files and MCP files, recall, notes, or reanchor. Does not create a store.",
+            "additionalProperties": false,
+            "required": [
+              "store"
+            ],
+            "properties": {
+              "store": {
+                "const": "absent"
+              }
+            }
+          },
+          "reanchorData": {
+            "type": "object",
+            "title": "reanchor --json data",
+            "description": "Payload for `ynotes reanchor --json`. Reports every note whose selectors were refreshed in place (`changed`), every note moved to a renamed file (`relocated`), every note deliberately left untouched with the reason (`skipped`), every already-anchored note whose body is still unreviewed (`review_pending`), and how many were already current (`unchanged`). Any note that moved gets a new id (the id hashes over target+bundle), `old_id`/`new_id` carry both for lineage tracking. Under `--dry-run` the same shape is emitted with `dry_run: true` and no writes occur.",
+            "additionalProperties": false,
+            "required": [
+              "dry_run",
+              "changed",
+              "relocated",
+              "skipped",
+              "review_pending",
+              "unchanged"
+            ],
+            "properties": {
+              "dry_run": {
+                "type": "boolean",
+                "description": "true when invoked with `--dry-run`, nothing was actually written."
+              },
+              "changed": {
+                "type": "array",
+                "description": "Notes refreshed in place (or that would be), the region moved or was edited within the same file. Each entry's `from` is the prior captured range; `to` is the range the refresher resolved to in the current file. A note that moved to a *different* file is reported under `relocated`, not here.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "target",
+                    "old_id",
+                    "new_id",
+                    "from",
+                    "to",
+                    "review_required"
+                  ],
+                  "properties": {
+                    "target": {
+                      "$ref": "#/$defs/target"
+                    },
+                    "old_id": {
+                      "$ref": "#/$defs/noteId"
+                    },
+                    "new_id": {
+                      "$ref": "#/$defs/noteId"
+                    },
+                    "from": {
+                      "$ref": "#/$defs/lineRange"
+                    },
+                    "to": {
+                      "$ref": "#/$defs/lineRange"
+                    },
+                    "review_required": {
+                      "type": "boolean",
+                      "description": "true when current code differs from the note's last explicit review basis. Reanchor refreshed location only; verify the body, then confirm it."
+                    }
+                  }
+                }
+              },
+              "relocated": {
+                "type": "array",
+                "description": "Notes relocated through a content-corroborated Git rename, or proposed relocations in a dry run. A changed target produces a new ID. If the region cannot be located at the destination, it is skipped instead. Always present.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "from_target",
+                    "to_target",
+                    "old_id",
+                    "new_id",
+                    "from",
+                    "to",
+                    "review_required"
+                  ],
+                  "properties": {
+                    "from_target": {
+                      "$ref": "#/$defs/target",
+                      "description": "The path the note was filed under before the rename."
+                    },
+                    "to_target": {
+                      "$ref": "#/$defs/target",
+                      "description": "The path it now lives at (the file's current name)."
+                    },
+                    "old_id": {
+                      "$ref": "#/$defs/noteId"
+                    },
+                    "new_id": {
+                      "$ref": "#/$defs/noteId"
+                    },
+                    "from": {
+                      "$ref": "#/$defs/lineRange",
+                      "description": "Where the region sat in the old file at save time."
+                    },
+                    "to": {
+                      "$ref": "#/$defs/lineRange",
+                      "description": "Where it resolved to in the renamed file."
+                    },
+                    "review_required": {
+                      "type": "boolean",
+                      "description": "true when current code differs from the note's last explicit review basis."
+                    }
+                  }
+                }
+              },
+              "skipped": {
+                "type": "array",
+                "description": "Notes deliberately left untouched, with the reason. `reason_code` is the stable enum to branch on; `reason` is the human form.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "target",
+                    "id",
+                    "reason_code",
+                    "reason"
+                  ],
+                  "properties": {
+                    "target": {
+                      "$ref": "#/$defs/target"
+                    },
+                    "id": {
+                      "$ref": "#/$defs/noteId"
+                    },
+                    "reason_code": {
+                      "type": "string",
+                      "enum": [
+                        "orphaned",
+                        "missing-target",
+                        "symlink-escape",
+                        "other"
+                      ],
+                      "description": "orphaned: the region cannot be identified. missing-target: the target is absent. symlink-escape: the target resolves outside the work tree. other: an unenumerated reason."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "Free-form human explanation suitable for display."
+                    }
+                  }
+                }
+              },
+              "review_pending": {
+                "type": "array",
+                "description": "Notes with current selectors whose code still differs from their review basis. They remain drifted and are also counted in unchanged. Verify the body before confirming with the reported current ID. Always present.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "target",
+                    "id"
+                  ],
+                  "properties": {
+                    "target": {
+                      "$ref": "#/$defs/target"
+                    },
+                    "id": {
+                      "$ref": "#/$defs/noteId"
+                    }
+                  }
+                }
+              },
+              "unchanged": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Number of notes requiring no selector update, including review_pending entries."
+              }
+            }
+          },
+          "noteId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Content-addressed note id: the SHA-256, hex-encoded, of (target, scope, bundle, review basis, body). Deterministic, no timestamp or randomness. **Rotates on reanchor, update, and confirm** when one of those hash inputs changes. To cache a stable handle to a note across maintenance, use the (target, scope, body) tuple rather than the id."
+          },
+          "target": {
+            "type": "string",
+            "description": "The note's target file, relative to the store's work tree, with forward slashes."
+          },
+          "lineRange": {
+            "type": "array",
+            "description": "An inclusive line range [start, end], 1-based.",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "recall",
+      "description": "Return the context notes overlapping a file or line region. Requires root: the absolute repository path. Call before editing or reviewing code you did not write this session - code that looks wrong may have a note explaining why it is deliberate. Statuses: anchored (region intact, not proof the claim is true), drifted (region moved or changed - verify against current code), orphaned (region gone - historical only). Notes follow file renames. Returns {\"store\":\"absent\"} when the repo has no note store. Use count: true to cheaply check whether context exists before pulling bodies.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "root",
+          "file"
+        ],
+        "properties": {
+          "root": {
+            "description": "Absolute path to the repository root this request addresses.",
+            "type": "string"
+          },
+          "file": {
+            "description": "Path to the file, relative to the repo root or absolute.",
+            "type": "string"
+          },
+          "start": {
+            "description": "1-based first line; omit with `end` for the whole file.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 1
+          },
+          "end": {
+            "description": "1-based last line; needs `start`; omit for a single line.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 1
+          },
+          "count": {
+            "description": "Return only the status breakdown (cheap existence check).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/queryData"
+          },
+          {
+            "$ref": "#/$defs/queryCountData"
+          },
+          {
+            "$ref": "#/$defs/storeAbsent"
+          }
+        ],
+        "$defs": {
+          "storeAbsent": {
+            "type": "object",
+            "title": "Store absent",
+            "description": "Successful absent-store result for CLI files and MCP files, recall, notes, or reanchor. Does not create a store.",
+            "additionalProperties": false,
+            "required": [
+              "store"
+            ],
+            "properties": {
+              "store": {
+                "const": "absent"
+              }
+            }
+          },
+          "queryCountData": {
+            "type": "object",
+            "title": "query --count --json data",
+            "description": "Status counts for a query, using the same rename-aware resolution as the full read. Carries count instead of notes and a malformed count instead of record details.",
+            "additionalProperties": false,
+            "required": [
+              "query",
+              "count",
+              "malformed",
+              "index",
+              "warnings"
+            ],
+            "properties": {
+              "query": {
+                "$ref": "#/$defs/querySpec"
+              },
+              "count": {
+                "$ref": "#/$defs/countBreakdown"
+              },
+              "malformed": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many relevant records could not be read or parsed, the count-mode analogue of `queryData.malformed[]`, so corruption is still flagged in summary mode (invariant #4). Pull the full query payload for record paths and any recoverable ids."
+              },
+              "index": {
+                "$ref": "#/$defs/indexHealth"
+              },
+              "warnings": {
+                "type": "array",
+                "description": "Non-fatal advisories, as in the full `query` payload. Always present; empty when there is nothing to flag.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "indexHealth": {
+            "type": "object",
+            "title": "index cache health",
+            "description": "Readability and identity drift of the rebuildable by-path cache observed while serving a read. Reads report this state but never repair it.",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "recovered",
+              "dangling"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "healthy",
+                  "missing",
+                  "malformed"
+                ],
+                "description": "Whether the index parsed successfully, was absent, or was malformed."
+              },
+              "recovered": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Record ids present on disk but absent from the index."
+              },
+              "dangling": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Index ids with no record file behind them."
+              }
+            }
+          },
+          "countBreakdown": {
+            "type": "object",
+            "title": "status breakdown",
+            "description": "A tally of resolved notes by anchor status, emitted by `--count` summary mode in place of the note bodies. `total` equals `anchored + drifted + orphaned`.",
+            "additionalProperties": false,
+            "required": [
+              "total",
+              "anchored",
+              "drifted",
+              "orphaned"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "anchored": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Notes located and intact."
+              },
+              "drifted": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Notes located but moved or edited."
+              },
+              "orphaned": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Notes no content rung could locate."
+              }
+            }
+          },
+          "querySpec": {
+            "type": "object",
+            "title": "query request echo",
+            "description": "The request `query --json` echoes back: the file and location arguments exactly as passed. Shared by the full and `--count` query payloads.",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "at"
+            ],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "The file argument as passed on the command line."
+              },
+              "at": {
+                "type": "string",
+                "description": "The location argument: `LINE`, `START:END`, or empty for a whole-file query."
+              }
+            }
+          },
+          "queryData": {
+            "type": "object",
+            "title": "query --json data",
+            "description": "Notes returned by a file or range query. The notes array includes anchored and drifted matches plus all orphans for the file.",
+            "additionalProperties": false,
+            "required": [
+              "query",
+              "notes",
+              "malformed",
+              "index",
+              "warnings"
+            ],
+            "properties": {
+              "query": {
+                "$ref": "#/$defs/querySpec"
+              },
+              "notes": {
+                "type": "array",
+                "description": "Overlapping anchored or drifted notes followed by every orphaned note for the file, regardless of interval.",
+                "items": {
+                  "$ref": "#/$defs/note"
+                }
+              },
+              "malformed": {
+                "type": "array",
+                "description": "Unreadable records relevant to this file, including unindexed records whose target is unknown. Skipped from `notes` because they cannot be resolved, but surfaced so corruption is never hidden (invariant #4). Always present; empty when there is nothing to flag.",
+                "items": {
+                  "$ref": "#/$defs/malformedNote"
+                }
+              },
+              "index": {
+                "$ref": "#/$defs/indexHealth"
+              },
+              "warnings": {
+                "type": "array",
+                "description": "Non-fatal advisories about this query, for example, that the target file does not exist (almost always a typo). The command still exits 0; the warning is the in-band signal. Always present; empty array when there is nothing to flag.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "malformedNote": {
+            "type": "object",
+            "title": "Malformed note record",
+            "description": "A record under notes/ that could not be read or parsed as a note. Surfaced by read paths even when it is absent from the index, so corruption is never hidden (invariant #4).",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "target",
+              "path",
+              "error"
+            ],
+            "properties": {
+              "id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/noteId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The id encoded by a canonical record path, or null for an irregular filename."
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/target"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The cached target, or null when an unindexed malformed record has no readable source for it."
+              },
+              "path": {
+                "type": "string",
+                "description": "Store-relative path to the unreadable record."
+              },
+              "error": {
+                "type": "string",
+                "description": "Why the record could not be read or parsed. Free-form, for display, branch on an entry being present, not on this text."
+              }
+            }
+          },
+          "target": {
+            "type": "string",
+            "description": "The note's target file, relative to the store's work tree, with forward slashes."
+          },
+          "noteId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Content-addressed note id: the SHA-256, hex-encoded, of (target, scope, bundle, review basis, body). Deterministic, no timestamp or randomness. **Rotates on reanchor, update, and confirm** when one of those hash inputs changes. To cache a stable handle to a note across maintenance, use the (target, scope, body) tuple rather than the id."
+          },
+          "note": {
+            "type": "object",
+            "title": "Resolved note",
+            "description": "A stored note resolved against the current file.",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "target",
+              "scope",
+              "status",
+              "stale",
+              "resolved_range",
+              "body"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/noteId"
+              },
+              "target": {
+                "$ref": "#/$defs/target"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "anchored",
+                  "drifted",
+                  "orphaned"
+                ],
+                "description": "anchored: region located and intact against its review basis. drifted: located, but moved or differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
+              },
+              "stale": {
+                "type": "boolean",
+                "description": "Agent convenience: false only for an anchored note; true for drifted or orphaned. A pure function of status, provided so an agent can branch on one boolean."
+              },
+              "resolved_range": {
+                "description": "Where the note resolved to in the current file, or null for an orphan.",
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/lineRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "previous_range": {
+                "$ref": "#/$defs/lineRange",
+                "description": "Present only for a drifted or orphaned note: the range it occupied before it moved or was lost."
+              },
+              "relocated_from": {
+                "type": "string",
+                "description": "Present when a note resolves through a file rename but is still stored under its pre-rename target. Pair with `relocated_to` for both sides of the pending migration; `reanchor` makes it durable."
+              },
+              "relocated_to": {
+                "type": "string",
+                "description": "Present with `relocated_from`: the current path where the note's region was content-corroborated. This lets `list`, `query`, and MCP inventories surface a pending rename without writing."
+              },
+              "body": {
+                "type": "string",
+                "description": "The note's context text."
+              },
+              "rungs": {
+                "type": "array",
+                "description": "Present only with --explain: each selector-ladder rung's outcome (the agreement vector).",
+                "items": {
+                  "$ref": "#/$defs/rung"
+                }
+              }
+            }
+          },
+          "rung": {
+            "type": "object",
+            "title": "Rung outcome",
+            "description": "One matching method's evidence. Scores are method-specific diagnostics in [0, 100], not a combined confidence. See ynotes skills get core --full for the scoring reference.",
+            "additionalProperties": false,
+            "required": [
+              "rung",
+              "result"
+            ],
+            "properties": {
+              "rung": {
+                "type": "string",
+                "enum": [
+                  "git",
+                  "quote",
+                  "structural",
+                  "fuzzy",
+                  "position"
+                ],
+                "description": "Which rung: git transport (R1), exact quote (R2), fuzzy alignment (R3), tree-sitter structure (R4), saved position (R5)."
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "hit",
+                  "miss",
+                  "skipped"
+                ],
+                "description": "hit: located the region. miss: ran but found nothing. skipped: could not run (e.g. not a git repo) and is not held against the result."
+              },
+              "range": {
+                "$ref": "#/$defs/lineRange",
+                "description": "Present only on a hit: where this rung believes the region now is."
+              },
+              "score": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100,
+                "description": "Present only on a hit: the rung's own confidence in its range. Scale per rung, git: 100 unchanged / 90 moved-untouched / 70 moved-touched; quote: 95 exact text still at the saved position / 90 disambiguated by prefix-suffix context, or unique at capture and still unique / 55 ambiguous or unverified; structural: 55–95 (95 = identical fingerprint); fuzzy: 45–80 (capped below 90, fuzzy alone never anchors); position: 20 in-range / 10 clamped (diagnostic only, never consulted by the verdict)."
+              }
+            }
+          },
+          "lineRange": {
+            "type": "array",
+            "description": "An inclusive line range [start, end], 1-based.",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "range",
+              "file"
+            ],
+            "description": "A contiguous line range or the whole file. A single-line note uses range with equal endpoints. The stored scope retains its original variant for ID compatibility."
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "remember",
+      "description": "Save a context note anchored to a code region, committed to the repo and shared with the team. Requires root: the absolute repository path, where the store is created on first use. Save the why, not the what: constraints, invariants, gotchas, cross-file couplings, rejected approaches. Only save what would surprise a competent reader in three months - never what the code plainly shows. Anchor to the smallest region the context is about (omit start/end for a whole-file note). Pass code (the region's text exactly as the file reads now) alongside start: stale line numbers are then verified and corrected, so the note cannot land on the wrong region. Saving to the same location supersedes the note there - this is also how you correct one. Check neighbours in the result: it lists the other notes already on that file, because superseding only collapses an identical location and a restatement a few lines away would otherwise land silently. If one already says what you just said, delete the new note or fold both into one.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "root",
+          "file",
+          "body"
+        ],
+        "properties": {
+          "root": {
+            "description": "Absolute path to the repository root this request addresses.",
+            "type": "string"
+          },
+          "file": {
+            "description": "Path to the file the context is about.",
+            "type": "string"
+          },
+          "start": {
+            "description": "1-based first line; omit both bounds for a file-scoped note.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 1
+          },
+          "end": {
+            "description": "1-based last line; needs `start`.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 1
+          },
+          "code": {
+            "description": "The region's text, exactly as the file reads now. Verifies `start` and\ncorrects it when the line numbers went stale, so the note cannot land\non the wrong region. Requires `start`; the region's length comes from\n`end` when given, else from the quote's line count.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "description": "The context text. Write for a reader who has not seen this session.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "$ref": "#/$defs/saveData",
+        "$defs": {
+          "saveData": {
+            "type": "object",
+            "title": "save --json data",
+            "description": "Payload for `ynotes save --json`: the saved note's identity. The id is a content hash of (target, scope, bundle, review basis, body) with no timestamp, so it is deterministic across machines and a retried identical save is a no-op. Note: subsequent maintenance may rotate the id, use (target, scope, body) as the stable lineage when caching a reference.",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "target",
+              "scope",
+              "range",
+              "created",
+              "store_created",
+              "neighbours"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/noteId"
+              },
+              "target": {
+                "$ref": "#/$defs/target"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "range": {
+                "$ref": "#/$defs/lineRange",
+                "description": "The line range captured at save time. For a file-scoped note this spans the whole file (1..line_count)."
+              },
+              "created": {
+                "type": "boolean",
+                "description": "true when this save created a new note; false when an identical note already existed (idempotent save)."
+              },
+              "store_created": {
+                "type": "boolean",
+                "description": "true only when this save created the .ynotes store at the Git root."
+              },
+              "neighbours": {
+                "type": "array",
+                "description": "Other notes on this file, earliest stored region first. Use these to inspect near-duplicates not removed by identical-location superseding. Empty when no other notes exist. Ranges are stored anchors; query resolves current locations.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "range",
+                    "body_excerpt"
+                  ],
+                  "properties": {
+                    "id": {
+                      "$ref": "#/$defs/noteId"
+                    },
+                    "range": {
+                      "$ref": "#/$defs/lineRange"
+                    },
+                    "body_excerpt": {
+                      "type": "string",
+                      "description": "The existing note's first body line, truncated, enough to recognise a restatement without pulling every body on the file into the payload."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "lineRange": {
+            "type": "array",
+            "description": "An inclusive line range [start, end], 1-based.",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "noteId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Content-addressed note id: the SHA-256, hex-encoded, of (target, scope, bundle, review basis, body). Deterministic, no timestamp or randomness. **Rotates on reanchor, update, and confirm** when one of those hash inputs changes. To cache a stable handle to a note across maintenance, use the (target, scope, body) tuple rather than the id."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "range",
+              "file"
+            ],
+            "description": "A contiguous line range or the whole file. A single-line note uses range with equal endpoints. The stored scope retains its original variant for ID compatibility."
+          },
+          "target": {
+            "type": "string",
+            "description": "The note's target file, relative to the store's work tree, with forward slashes."
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

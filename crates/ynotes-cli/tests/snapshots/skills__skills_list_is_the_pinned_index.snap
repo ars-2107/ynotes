@@ -1,0 +1,7 @@
+---
+source: crates/ynotes-cli/tests/skills.rs
+expression: "String::from_utf8(output.stdout).expect(\"utf-8\")"
+---
+  core         Read and write code-anchored context with ynotes. Use before editing annotated files, when asked to recall or save code context, or when recording a non-obvious constraint for future work.
+  sharing      Share a ynotes store through Git. Use when committing .ynotes, resolving store merge conflicts, recovering notes after merges, or setting team and multi-agent conventions.
+  maintenance  Maintain ynotes stores. Use after refactors, for drifted or orphaned notes, when doctor reports record or index problems, or for an explicitly requested cleanup.

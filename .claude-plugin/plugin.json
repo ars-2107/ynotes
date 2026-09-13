@@ -1,0 +1,18 @@
+{
+  "name": "ynotes",
+  "description": "Code-anchored context notes for agents: recall before editing, remember after work. Registers the ynotes MCP server and a discovery skill.",
+  "version": "0.1.0",
+  "author": {
+    "name": "ars-2107"
+  },
+  "homepage": "https://github.com/ars-2107/ynotes",
+  "repository": "https://github.com/ars-2107/ynotes",
+  "license": "MIT",
+  "keywords": ["notes", "context", "code-anchored", "mcp", "agents"],
+  "mcpServers": {
+    "ynotes": {
+      "command": "ynotes",
+      "args": ["mcp"]
+    }
+  }
+}

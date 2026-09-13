@@ -1,0 +1,242 @@
+name: Release
+
+# Tags publish binaries and npm packages. Setup and checks are in RELEASING.md.
+
+on:
+  push:
+    tags: ['v*']
+
+# Do not interrupt publication after some packages or assets have been uploaded.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  guard:
+    name: verify tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - id: check
+        # The tag and the Cargo.toml workspace version must
+        # agree, or the release is rejected before anything is built.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          echo "tag=$tag crate=$crate"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::tag v$tag does not match Cargo.toml version $crate"
+            exit 1
+          fi
+          echo "version=$crate" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.pkg }}
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # One runner per target. Linux x86_64/Windows are native; Linux arm64
+      # uses GitHub's arm64 runner; both macOS targets build on Apple Silicon
+      # (x86_64 via Apple clang's built-in cross support). musl targets build
+      # natively too, with the musl C toolchain for the vendored tree-sitter
+      # grammars. `can_run` marks the targets this runner can also execute.
+      matrix:
+        include:
+          - { pkg: linux-x64, target: x86_64-unknown-linux-gnu, os: ubuntu-latest, can_run: true }
+          - { pkg: linux-arm64, target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, can_run: true }
+          - { pkg: linux-musl-x64, target: x86_64-unknown-linux-musl, os: ubuntu-latest, can_run: true }
+          - { pkg: linux-musl-arm64, target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, can_run: true }
+          - { pkg: darwin-x64, target: x86_64-apple-darwin, os: macos-14, can_run: false }
+          - { pkg: darwin-arm64, target: aarch64-apple-darwin, os: macos-14, can_run: true }
+          - { pkg: win32-x64, target: x86_64-pc-windows-msvc, os: windows-latest, can_run: true }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # No build cache in the release pipeline: a cache entry poisoned by a
+      # less-trusted CI run must never reach a published binary. Release
+      # builds are clean and from-scratch (zizmor: cache-poisoning).
+      - name: build
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          # musl targets compile the vendored tree-sitter C with musl-gcc.
+          case "$TARGET" in
+            *-musl) export CC=musl-gcc ;;
+          esac
+          cargo build --release --locked --target "$TARGET" --bin ynotes
+      - name: verify binary
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          RUNNER_OS: ${{ runner.os }}
+          CAN_RUN: ${{ matrix.can_run }}
+        run: |
+          set -euo pipefail
+          bin=ynotes
+          [ "$RUNNER_OS" = Windows ] && bin=ynotes.exe
+          src="target/$TARGET/release/$bin"
+          test -f "$src" || { echo "::error::build produced no binary at $src"; exit 1; }
+          size=$(wc -c < "$src")
+          echo "size: $size bytes"
+          # A real ynotes binary bundles 13 tree-sitter grammars (~16 MB); a
+          # broken or empty build is tiny. Fail well below the real floor.
+          if [ "$size" -lt 1000000 ]; then
+            echo "::error::$src is only $size bytes, the build looks broken"
+            exit 1
+          fi
+          command -v file >/dev/null 2>&1 && file "$src" || true
+          # Smoke-run on targets this runner can execute (all but the
+          # cross-built x86_64 macOS binary).
+          if [ "$CAN_RUN" = true ]; then
+            "$src" --version
+            "$src" doctor
+          fi
+
+      - name: stage artifacts
+        shell: bash
+        # Produces two things under dist/, both consumed downstream:
+        #   dist/npm/<pkg>/<bin>          -> the per-platform npm package
+        #   dist/release/<archive>        -> the GitHub Release asset
+        env:
+          TARGET: ${{ matrix.target }}
+          PKG: ${{ matrix.pkg }}
+          RUNNER_OS: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          bin=ynotes
+          [ "$RUNNER_OS" = Windows ] && bin=ynotes.exe
+          src="target/$TARGET/release/$bin"
+
+          mkdir -p "dist/npm/$PKG" dist/release
+          cp "$src" "dist/npm/$PKG/$bin"
+
+          stage="ynotes-$TARGET"
+          mkdir "$stage"
+          cp "$src" README.md CHANGELOG.md RELEASING.md LICENSE "$stage/"
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a "dist/release/$stage.zip" "$stage" >/dev/null
+          else
+            tar -czf "dist/release/$stage.tar.gz" "$stage"
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-${{ matrix.pkg }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  github-release:
+    name: GitHub Release
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: build-*
+          path: artifacts
+          merge-multiple: true
+      - name: collect assets and checksums
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp artifacts/release/* out/
+          (cd out && sha256sum -- * > SHA256SUMS)
+      - name: extract release notes
+        # Enforces Keep a Changelog discipline: the tagged version must have
+        # its own `## [X.Y.Z]` section in CHANGELOG.md before the tag is cut.
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { grab=1; next }
+            grab && /^## \[/        { exit }
+            grab                    { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## [$VERSION]' section"
+            exit 1
+          fi
+      - name: create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            out/*
+
+  publish-npm:
+    name: Publish to npm
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      # No `cache:` input is passed, so setup-node writes no cache and cannot
+      # be a cache-poisoning vector here; the audit is suppressed as a false
+      # positive for this configuration.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 # zizmor: ignore[cache-poisoning]
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: build-*
+          path: artifacts
+          merge-multiple: true
+      - name: sync versions and place binaries
+        run: |
+          set -euo pipefail
+          node scripts/sync-version.mjs
+          for d in artifacts/npm/*/; do
+            pkg=$(basename "$d")
+            mkdir -p "npm/$pkg/bin"
+            cp "$d"* "npm/$pkg/bin/"
+            cp LICENSE "npm/$pkg/LICENSE"
+            chmod +x "npm/$pkg/bin/"* 2>/dev/null || true
+          done
+      - name: publish per-platform packages
+        # Published before the main package so its optionalDependencies
+        # resolve the moment `ynotes` itself goes live.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for d in npm/*/; do
+            npm publish "$d" --provenance --access public
+          done
+      - name: publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
