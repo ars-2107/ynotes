@@ -292,16 +292,29 @@ impl GitContext {
     /// and the work tree, with `old_path` as it was in `from_commit` and
     /// `new_path` as it is now.
     ///
-    /// Renames are taken one commit at a time (`git log from_commit..HEAD`,
-    /// oldest first), then the uncommitted diff against `HEAD`, and chained
-    /// so a multi-hop move (`a` → `b` → `c`) reports `(a, c)`. A single
-    /// whole-span diff cannot do this: rename similarity is measured against
-    /// the baseline blob, so a file that was edited heavily *between* the
-    /// baseline and its rename falls under the threshold and reads as delete
-    /// plus add, even though the rename commit itself is a clean move. The
-    /// whole-span diff is still unioned in last, for a baseline that is not
-    /// an ancestor of `HEAD` (a note saved on another branch) and for history
-    /// that is unavailable locally.
+    /// Renames are taken one commit at a time (`git log --topo-order
+    /// from_commit..HEAD`, oldest first), then the uncommitted diff against
+    /// `HEAD`, and chained so a multi-hop move (`a` → `b` → `c`) reports
+    /// `(a, c)`. A single whole-span diff cannot do this: rename similarity
+    /// is measured against the baseline blob, so a file that was edited
+    /// heavily *between* the baseline and its rename falls under the
+    /// threshold and reads as delete plus add, even though the rename commit
+    /// itself is a clean move.
+    ///
+    /// The chain composes only if steps arrive in ancestry order, which
+    /// `--topo-order` guarantees; plain `git log --reverse` orders by commit
+    /// date, and merged side branches can interleave out of ancestry order.
+    /// Every commit is visited, including those on merged side branches, so
+    /// each rename is compared against its own parent. `--first-parent` would
+    /// not do: it diffs a merge against the first parent, which is the
+    /// baseline-versus-rewritten comparison that fails the threshold.
+    ///
+    /// The whole-span diff is always unioned in last, for any origin the
+    /// walk did not claim: a baseline that is not an ancestor of `HEAD` (a
+    /// note saved on another branch) or history that is unavailable locally.
+    /// An origin the walk did claim keeps the walk's answer even when the
+    /// whole-span diff would pair it differently; content corroboration at
+    /// the proposed path decides either way (invariant #10).
     ///
     /// The unit of work is the *commit*, not the path: git has to diff the
     /// whole tree either way, because scoping the pathspec to one side of a
@@ -319,14 +332,16 @@ impl GitContext {
             return Vec::new();
         }
         let mut steps = Vec::new();
-        // Committed history, one record per rename step, oldest first so the
-        // chain composes in the order the moves happened.
+        // Committed history, one record per rename step, oldest first in
+        // ancestry order so the chain composes in the order the moves
+        // happened. See the doc comment for why date order is not enough.
         let range = format!("{from_commit}..HEAD");
         if let Some(out) = run_history_prefix(
             &self.root,
             &[
                 "log",
                 "--reverse",
+                "--topo-order",
                 RENAME_FIND,
                 "--name-status",
                 "-z",
@@ -352,7 +367,8 @@ impl GitContext {
             steps.extend(parse_renames_z(&out));
         }
         let mut chained = chain_renames(steps);
-        // Whole-span fallback, for renames the walk could not see.
+        // Whole-span union, for origins the walk could not see. An origin the
+        // walk already claimed is not overridden.
         if let Some(out) = run(
             &self.root,
             &[

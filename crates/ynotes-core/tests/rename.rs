@@ -168,6 +168,66 @@ fn renamed_to_follows_a_rename_after_the_file_drifted_from_its_baseline() {
     );
 }
 
+/// A rename made on a side branch after a heavy rewrite is only a clean move
+/// against its own parent; the merge commit's diff against the main line
+/// compares baseline against rewritten text and fails the threshold. The walk
+/// must visit the side branch's commits in ancestry order, find the rename
+/// there, and compose it with a later hop on the main line.
+#[test]
+fn renamed_to_follows_a_rename_merged_from_a_side_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    if !init_repo(root) {
+        eprintln!("skipping: no usable `git` binary");
+        return;
+    }
+    let mut original = String::new();
+    for i in 0..20 {
+        writeln!(original, "fn alpha_{i}() {{}}").unwrap();
+    }
+    std::fs::write(root.join("old.rs"), &original).unwrap();
+    std::fs::write(root.join("other.txt"), "one\n").unwrap();
+    git(root, &["add", "."]);
+    if !git(root, &["commit", "-q", "-m", "init"]) {
+        eprintln!("skipping: git commit unavailable");
+        return;
+    }
+    let ctx = GitContext::discover(root).expect("repo discovered");
+    let base = ctx.head_commit().expect("HEAD commit");
+
+    // Side branch: rewrite heavily, then rename in its own commit.
+    git(root, &["checkout", "-q", "-b", "side"]);
+    let mut rewritten = String::new();
+    for i in 0..20 {
+        writeln!(rewritten, "pub fn beta_{i}(x: u32) -> u32 {{ x + {i} }}").unwrap();
+    }
+    std::fs::write(root.join("old.rs"), rewritten).unwrap();
+    git(root, &["commit", "-q", "-am", "rewrite"]);
+    git(root, &["mv", "old.rs", "mid.rs"]);
+    git(root, &["commit", "-q", "-m", "rename on side"]);
+
+    // Main line moves on independently, so the merge is a real merge commit.
+    git(root, &["checkout", "-q", "-"]);
+    std::fs::write(root.join("other.txt"), "one\ntwo\n").unwrap();
+    git(root, &["commit", "-q", "-am", "unrelated"]);
+    git(root, &["merge", "-q", "--no-ff", "--no-edit", "side"]);
+
+    assert_eq!(
+        ctx.renamed_to(&base, "old.rs").as_deref(),
+        Some("mid.rs"),
+        "a rename merged from a side branch must be seen at the merge"
+    );
+
+    // A later hop on the main line composes onto the merged one.
+    git(root, &["mv", "mid.rs", "new.rs"]);
+    git(root, &["commit", "-q", "-m", "rename on main"]);
+    assert_eq!(
+        ctx.renamed_to(&base, "old.rs").as_deref(),
+        Some("new.rs"),
+        "the merged hop and the later hop must chain"
+    );
+}
+
 #[test]
 fn renamed_to_detects_a_staged_uncommitted_rename() {
     let dir = tempfile::tempdir().unwrap();
