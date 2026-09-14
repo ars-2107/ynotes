@@ -463,9 +463,10 @@ fn a_concurrent_reanchor_merge_keeps_notes_valid_and_reanchor_dedups() {
     // failure is only actionable with the full picture: the surviving notes
     // and the reanchor report (which rung diverged), plus the store as git
     // left it after the merge and as it stands now (whether a record survived
-    // removal, and at which path). This has failed once on CI without
-    // reproducing locally, so the repository is also kept on disk, and copied
-    // under `YNOTES_TEST_ARTIFACT_DIR` when set, for the CI artifact upload.
+    // removal, and at which path). The merge outcome depends on the git
+    // version and platform, so the repository is also kept on disk, and copied
+    // under `YNOTES_TEST_ARTIFACT_DIR` when set, for offline diagnosis of a
+    // failure that only occurs on another machine.
     let after_reanchor = store_dump(repo);
     let kept = dir.keep();
     let copied = std::env::var_os("YNOTES_TEST_ARTIFACT_DIR").map(|d| {
