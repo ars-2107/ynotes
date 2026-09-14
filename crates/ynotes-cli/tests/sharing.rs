@@ -313,6 +313,64 @@ fn a_concurrent_reanchor_merge_keeps_notes_valid_and_reanchor_dedups() {
         }
         out
     }
+    fn git_out(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("git runs");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    }
+    /// Everything a reader needs to explain a collapse failure after the fact:
+    /// the git version and history, the working tree, each record file with
+    /// the id it carries inside (a mismatch means a record sits at the wrong
+    /// path), and the index cache.
+    fn store_dump(repo: &std::path::Path) -> String {
+        use std::fmt::Write as _;
+        let mut s = String::new();
+        let git_version = git_out(repo, &["--version"]);
+        let git_status = git_out(repo, &["status", "--short"]);
+        let git_log = git_out(repo, &["log", "--oneline", "--graph", "--all"]);
+        write!(
+            s,
+            "git version: {git_version}git status:\n{git_status}git log:\n{git_log}"
+        )
+        .unwrap();
+        s.push_str("note records (path -> id inside):\n");
+        let mut files = note_files(repo);
+        files.sort();
+        for f in files {
+            let rel = f.strip_prefix(repo).unwrap_or(&f).display();
+            let id = std::fs::read_to_string(&f)
+                .ok()
+                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                .and_then(|v| v["id"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| "<unreadable>".to_owned());
+            writeln!(s, "  {rel}  id={id}").unwrap();
+        }
+        let index = repo.join(".ynotes/index/by-path.json");
+        let index_body =
+            std::fs::read_to_string(&index).unwrap_or_else(|e| format!("<unreadable: {e}>\n"));
+        write!(s, "index ({}):\n{index_body}", index.display()).unwrap();
+        s
+    }
+    fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let to = dst.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_tree(&entry.path(), &to)?;
+            } else {
+                std::fs::copy(entry.path(), &to)?;
+            }
+        }
+        Ok(())
+    }
 
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = dir.path();
@@ -364,13 +422,8 @@ fn a_concurrent_reanchor_merge_keeps_notes_valid_and_reanchor_dedups() {
     // Merge A into B. A rename/rename conflict is EXPECTED, we do not assert
     // success; we assert the note files were not corrupted.
     git(repo, &["checkout", "-q", "b"]);
-    drop(
-        std::process::Command::new("git")
-            .current_dir(repo)
-            .args(["merge", "--no-edit", "a"])
-            .output()
-            .expect("git merge runs"),
-    );
+    let merge = git_out(repo, &["merge", "--no-edit", "a"]);
+    let after_merge = store_dump(repo);
 
     for f in note_files(repo) {
         let s = std::fs::read_to_string(&f).unwrap();
@@ -403,16 +456,39 @@ fn a_concurrent_reanchor_merge_keeps_notes_valid_and_reanchor_dedups() {
         .success();
     let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
     let notes = v["data"]["notes"].as_array().unwrap();
+    if notes.len() == 1 {
+        return;
+    }
     // Collapse depends on both notes re-anchoring to the *same* bundle, so a
-    // failure is only actionable with the surviving notes and the reanchor
-    // report in hand: a bare count says the ids diverged but not on which rung.
-    assert_eq!(
+    // failure is only actionable with the full picture: the surviving notes
+    // and the reanchor report (which rung diverged), plus the store as git
+    // left it after the merge and as it stands now (whether a record survived
+    // removal, and at which path). The merge outcome depends on the git
+    // version and platform, so the repository is also kept on disk, and copied
+    // under `YNOTES_TEST_ARTIFACT_DIR` when set, for offline diagnosis of a
+    // failure that only occurs on another machine.
+    let after_reanchor = store_dump(repo);
+    let kept = dir.keep();
+    let copied = std::env::var_os("YNOTES_TEST_ARTIFACT_DIR").map(|d| {
+        let to = std::path::Path::new(&d)
+            .join("a_concurrent_reanchor_merge_keeps_notes_valid_and_reanchor_dedups");
+        match copy_tree(&kept, &to) {
+            Ok(()) => format!("{}", to.display()),
+            Err(e) => format!("copy to {} failed: {e}", to.display()),
+        }
+    });
+    panic!(
+        "reanchor must collapse the post-merge duplicates to one note, got {}\n\
+         reanchor report: {}\nsurviving notes: {}\n\
+         --- git merge output ---\n{merge}\
+         --- store after merge ---\n{after_merge}\
+         --- store after reanchor ---\n{after_reanchor}\
+         repository kept at: {}\nartifact copy: {}",
         notes.len(),
-        1,
-        "reanchor must collapse the post-merge duplicates to one note\n\
-         reanchor report: {}\nsurviving notes: {}",
         String::from_utf8_lossy(&reanchored.get_output().stdout),
-        serde_json::to_string_pretty(notes).unwrap()
+        serde_json::to_string_pretty(notes).unwrap(),
+        kept.display(),
+        copied.unwrap_or_else(|| "not requested (YNOTES_TEST_ARTIFACT_DIR unset)".to_owned())
     );
 }
 
