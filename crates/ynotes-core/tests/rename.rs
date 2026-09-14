@@ -1,6 +1,7 @@
 //! Rename discovery and persistence with content corroboration.
 //! Git-dependent cases return early when Git is unavailable.
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Command;
 
@@ -108,6 +109,62 @@ fn renamed_to_detects_a_committed_rename() {
         ctx.renamed_to(&base, "never-existed.rs"),
         None,
         "a path that was never renamed must not report a destination"
+    );
+}
+
+/// Rename similarity is measured against the baseline blob. A file edited
+/// heavily after the note was saved and only then renamed scores under the
+/// threshold in one whole-span diff (delete plus add), while the rename commit
+/// itself is a clean move. Forward detection walks commit by commit so that
+/// note still follows its file, and a second hop is composed onto the first.
+#[test]
+fn renamed_to_follows_a_rename_after_the_file_drifted_from_its_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    if !init_repo(root) {
+        eprintln!("skipping: no usable `git` binary");
+        return;
+    }
+    let mut original = String::new();
+    for i in 0..20 {
+        writeln!(original, "fn alpha_{i}() {{}}").unwrap();
+    }
+    std::fs::write(root.join("old.rs"), &original).unwrap();
+    git(root, &["add", "."]);
+    if !git(root, &["commit", "-q", "-m", "init"]) {
+        eprintln!("skipping: git commit unavailable");
+        return;
+    }
+    let ctx = GitContext::discover(root).expect("repo discovered");
+    let base = ctx.head_commit().expect("HEAD commit");
+
+    // Rewrite almost everything in place, then rename in a later commit.
+    let mut rewritten = String::new();
+    for i in 0..20 {
+        writeln!(rewritten, "pub fn beta_{i}(x: u32) -> u32 {{ x + {i} }}").unwrap();
+    }
+    std::fs::write(root.join("old.rs"), rewritten).unwrap();
+    git(root, &["commit", "-q", "-am", "rewrite"]);
+    git(root, &["mv", "old.rs", "mid.rs"]);
+    git(root, &["commit", "-q", "-m", "rename once"]);
+
+    assert_eq!(
+        ctx.renamed_to(&base, "old.rs").as_deref(),
+        Some("mid.rs"),
+        "a clean rename after heavy edits must be followed from the old baseline"
+    );
+
+    // Second hop, staged only: the chain composes across committed and staged.
+    git(root, &["mv", "mid.rs", "new.rs"]);
+    assert_eq!(
+        ctx.renamed_to(&base, "old.rs").as_deref(),
+        Some("new.rs"),
+        "a two-hop move must report the current name"
+    );
+    assert_eq!(
+        ctx.renamed_to(&base, "mid.rs"),
+        None,
+        "an intermediate name that did not exist in the baseline is not a rename source"
     );
 }
 

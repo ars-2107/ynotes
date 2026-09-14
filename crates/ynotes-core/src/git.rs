@@ -289,7 +289,19 @@ impl GitContext {
     }
 
     /// Every `(old_path, new_path)` rename git detects between `from_commit`
-    /// and the work tree.
+    /// and the work tree, with `old_path` as it was in `from_commit` and
+    /// `new_path` as it is now.
+    ///
+    /// Renames are taken one commit at a time (`git log from_commit..HEAD`,
+    /// oldest first), then the uncommitted diff against `HEAD`, and chained
+    /// so a multi-hop move (`a` → `b` → `c`) reports `(a, c)`. A single
+    /// whole-span diff cannot do this: rename similarity is measured against
+    /// the baseline blob, so a file that was edited heavily *between* the
+    /// baseline and its rename falls under the threshold and reads as delete
+    /// plus add, even though the rename commit itself is a clean move. The
+    /// whole-span diff is still unioned in last, for a baseline that is not
+    /// an ancestor of `HEAD` (a note saved on another branch) and for history
+    /// that is unavailable locally.
     ///
     /// The unit of work is the *commit*, not the path: git has to diff the
     /// whole tree either way, because scoping the pathspec to one side of a
@@ -297,7 +309,7 @@ impl GitContext {
     /// notes should therefore fetch this once per distinct baseline commit and
     /// look up each path in the result, rather than calling
     /// [`renamed_to`](Self::renamed_to) per note, otherwise a store with `n`
-    /// orphans costs `n` full-tree diffs on every read.
+    /// orphans costs `n` history walks on every read.
     ///
     /// Empty on any git failure, or for a commit that is not a well-formed
     /// object id.
@@ -306,7 +318,42 @@ impl GitContext {
         if !is_object_id(from_commit) {
             return Vec::new();
         }
-        run(
+        let mut steps = Vec::new();
+        // Committed history, one record per rename step, oldest first so the
+        // chain composes in the order the moves happened.
+        let range = format!("{from_commit}..HEAD");
+        if let Some(out) = run_history_prefix(
+            &self.root,
+            &[
+                "log",
+                "--reverse",
+                RENAME_FIND,
+                "--name-status",
+                "-z",
+                "--diff-filter=R",
+                "--format=",
+                &range,
+            ],
+        ) {
+            steps.extend(parse_renames_z(&out));
+        }
+        // Staged or working-tree rename, not in any commit yet, applied last.
+        if let Some(out) = run(
+            &self.root,
+            &[
+                "diff",
+                RENAME_FIND,
+                "--name-status",
+                "-z",
+                "--diff-filter=R",
+                "HEAD",
+            ],
+        ) {
+            steps.extend(parse_renames_z(&out));
+        }
+        let mut chained = chain_renames(steps);
+        // Whole-span fallback, for renames the walk could not see.
+        if let Some(out) = run(
             &self.root,
             &[
                 "diff",
@@ -316,9 +363,14 @@ impl GitContext {
                 "--diff-filter=R",
                 from_commit,
             ],
-        )
-        .map(|out| parse_renames_z(&out))
-        .unwrap_or_default()
+        ) {
+            for (old, new) in parse_renames_z(&out) {
+                if !chained.iter().any(|(seen, _)| *seen == old) {
+                    chained.push((old, new));
+                }
+            }
+        }
+        chained
     }
 
     /// Every earlier path the work-tree file `rel_path` was renamed from, most
@@ -397,6 +449,23 @@ impl GitContext {
 /// is corroborated by the content ladder at the new path (invariant #10), so a
 /// spurious pairing resolves to no region and is declined rather than acted on.
 const RENAME_FIND: &str = "-M40%";
+
+/// Composes rename steps, given in the order they happened, into
+/// `(origin, current)` pairs. A step whose old side is some chain's current
+/// name extends that chain; anything else starts a new one. A chain that ends
+/// back at its origin is dropped: the path was not renamed after all.
+fn chain_renames(steps: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut chains: Vec<(String, String)> = Vec::new();
+    for (old, new) in steps {
+        if let Some(chain) = chains.iter_mut().find(|(_, current)| *current == old) {
+            chain.1 = new;
+        } else {
+            chains.push((old, new));
+        }
+    }
+    chains.retain(|(origin, current)| origin != current);
+    chains
+}
 
 /// Parses `-z --name-status` output, returning `(old, new)` rename pairs.
 ///
@@ -552,8 +621,9 @@ fn run(dir: &Path, args: &[&str]) -> Option<String> {
 /// promised objects remain remote. Offline, `git log --follow` emits the local
 /// rename records first and then exits non-zero when it reaches the missing
 /// history. Those records are still authoritative local evidence. Discarding
-/// them makes reverse rename discovery silently weaker than forward reanchor,
-/// which has the note's baseline and needs no history walk.
+/// them makes rename discovery silently weaker in either direction; the
+/// forward walk additionally falls back to a whole-span diff against the
+/// note's baseline.
 ///
 /// This tolerance is deliberately isolated to committed rename history. Every
 /// other git operation uses [`run`] and requires a successful exit status.
@@ -568,4 +638,46 @@ fn run_history_prefix(dir: &Path, args: &[&str]) -> Option<String> {
         return None;
     }
     String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chain_renames;
+
+    fn pairs(steps: &[(&str, &str)]) -> Vec<(String, String)> {
+        steps
+            .iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn chain_renames_composes_a_multi_hop_move() {
+        assert_eq!(
+            chain_renames(pairs(&[("a", "b"), ("b", "c")])),
+            pairs(&[("a", "c")])
+        );
+    }
+
+    #[test]
+    fn chain_renames_keeps_independent_moves_apart() {
+        assert_eq!(
+            chain_renames(pairs(&[("a", "b"), ("x", "y")])),
+            pairs(&[("a", "b"), ("x", "y")])
+        );
+    }
+
+    #[test]
+    fn chain_renames_drops_a_move_that_returned_home() {
+        assert!(chain_renames(pairs(&[("a", "b"), ("b", "a")])).is_empty());
+    }
+
+    #[test]
+    fn chain_renames_follows_a_name_reused_after_a_swap() {
+        // a -> tmp, b -> a, tmp -> b: a and b swapped.
+        assert_eq!(
+            chain_renames(pairs(&[("a", "tmp"), ("b", "a"), ("tmp", "b")])),
+            pairs(&[("a", "b"), ("b", "a")])
+        );
+    }
 }
