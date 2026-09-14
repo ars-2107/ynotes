@@ -570,7 +570,7 @@ expression: tools
               "drifted": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Notes located but moved or edited."
+                "description": "Notes located but edited."
               },
               "orphaned": {
                 "type": "integer",
@@ -700,7 +700,7 @@ expression: tools
                   "drifted",
                   "orphaned"
                 ],
-                "description": "anchored: region located and intact against its review basis. drifted: located, but moved or differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
+                "description": "anchored: region located and intact against its review basis, possibly at a new position. drifted: located, but its content differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
               },
               "stale": {
                 "type": "boolean",
@@ -719,7 +719,7 @@ expression: tools
               },
               "previous_range": {
                 "$ref": "#/$defs/lineRange",
-                "description": "Present only for a drifted or orphaned note: the range it occupied before it moved or was lost."
+                "description": "Present when the region is no longer at its saved range: on an anchored or drifted note that moved, and on an orphaned note (its last known range). Absent when the note resolves where it was saved."
               },
               "relocated_from": {
                 "type": "string",
@@ -1092,7 +1092,7 @@ expression: tools
     },
     {
       "name": "recall",
-      "description": "Return the context notes overlapping a file or line region. Requires root: the absolute repository path. Call before editing or reviewing code you did not write this session - code that looks wrong may have a note explaining why it is deliberate. Statuses: anchored (region intact, not proof the claim is true), drifted (region moved or changed - verify against current code), orphaned (region gone - historical only). Notes follow file renames. Returns {\"store\":\"absent\"} when the repo has no note store. Use count: true to cheaply check whether context exists before pulling bodies.",
+      "description": "Return the context notes overlapping a file or line region. Requires root: the absolute repository path. Call before editing or reviewing code you did not write this session - code that looks wrong may have a note explaining why it is deliberate. Statuses: anchored (region intact, possibly moved; not proof the claim is true), drifted (region content changed - verify against current code), orphaned (region gone - historical only). Notes follow file renames. Returns {\"store\":\"absent\"} when the repo has no note store. Use count: true to cheaply check whether context exists before pulling bodies.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "required": [
@@ -1257,7 +1257,7 @@ expression: tools
               "drifted": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Notes located but moved or edited."
+                "description": "Notes located but edited."
               },
               "orphaned": {
                 "type": "integer",
@@ -1412,7 +1412,7 @@ expression: tools
                   "drifted",
                   "orphaned"
                 ],
-                "description": "anchored: region located and intact against its review basis. drifted: located, but moved or differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
+                "description": "anchored: region located and intact against its review basis, possibly at a new position. drifted: located, but its content differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
               },
               "stale": {
                 "type": "boolean",
@@ -1431,7 +1431,7 @@ expression: tools
               },
               "previous_range": {
                 "$ref": "#/$defs/lineRange",
-                "description": "Present only for a drifted or orphaned note: the range it occupied before it moved or was lost."
+                "description": "Present when the region is no longer at its saved range: on an anchored or drifted note that moved, and on an orphaned note (its last known range). Absent when the note resolves where it was saved."
               },
               "relocated_from": {
                 "type": "string",

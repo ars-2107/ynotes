@@ -61,8 +61,8 @@ The first save creates a store at the enclosing Git root. Outside Git, run
 
 | Status | Meaning |
 | --- | --- |
-| `anchored` | The region is located and intact against its review basis. |
-| `drifted` | The region is located, but moved or differs from its review basis. |
+| `anchored` | The region is located and intact against its review basis. It may have moved; `previous_range` says from where. |
+| `drifted` | The region is located, but its content differs from its review basis. |
 | `orphaned` | The region could not be identified. The note is still returned. |
 
 `anchored` does not prove a note is true. Callers, configuration, and external

@@ -105,9 +105,10 @@ pub struct MalformedView {
 pub struct CountView {
     /// Total notes tallied, equals `anchored + drifted + orphaned`.
     pub total: u32,
-    /// Notes whose code was found present and intact at the saved position.
+    /// Notes whose code was found present and intact, at the saved position
+    /// or moved within the file.
     pub anchored: u32,
-    /// Notes found, but moved and/or edited since they were written.
+    /// Notes found, but edited since they were written.
     pub drifted: u32,
     /// Notes no content rung could locate, surfaced anyway (invariant #4).
     pub orphaned: u32,
@@ -154,8 +155,14 @@ pub fn malformed_view(m: &MalformedNote) -> MalformedView {
 /// Maps a resolved note to its view; includes the rung vector if `explain`.
 #[must_use]
 pub fn note_view(rn: &ResolvedNote, explain: bool) -> NoteView {
+    let saved = rn.note.bundle.position.range;
     let (status, previous) = match rn.resolution.status {
-        AnchorStatus::Anchored => ("anchored", None),
+        // An intact region that moved is still anchored; the move is reported,
+        // not treated as staleness.
+        AnchorStatus::Anchored => (
+            "anchored",
+            (rn.resolution.range != Some(saved)).then_some([saved.start(), saved.end()]),
+        ),
         AnchorStatus::Drifted { from } => ("drifted", Some([from.start(), from.end()])),
         AnchorStatus::Orphaned { last_known } => {
             ("orphaned", Some([last_known.start(), last_known.end()]))

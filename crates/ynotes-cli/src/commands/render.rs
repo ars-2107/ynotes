@@ -69,7 +69,14 @@ pub(crate) fn write_text_note(
         .resolved_range
         .map_or_else(|| "?".to_owned(), |[a, b]| format!("{a}:{b}"));
     let (tag, colour) = match rn.resolution.status {
-        AnchorStatus::Anchored => ("anchored".to_owned(), Colour::Green),
+        AnchorStatus::Anchored => {
+            // Intact but moved: still green, the move is information not alarm.
+            let tag = match v.previous_range {
+                Some([a, b]) => format!("anchored was {a}:{b}"),
+                None => "anchored".to_owned(),
+            };
+            (tag, Colour::Green)
+        }
         AnchorStatus::Drifted { from } => {
             // "was X" only when the region actually moved. A content-only
             // drift, an in-place edit, or any note just refreshed by

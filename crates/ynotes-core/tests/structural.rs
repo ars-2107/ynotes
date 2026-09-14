@@ -56,9 +56,11 @@ fn structural_survives_reformat_and_move() {
     let res = resolve(&bundle, &v2, None);
 
     let r = res.range.expect("relocated, not orphaned");
+    // Reformatted and moved, but the construct's fingerprint is identical:
+    // the note is anchored at its new position, not stale.
     assert!(
-        matches!(res.status, AnchorStatus::Drifted { .. }),
-        "moved ⇒ drifted, got {:?}",
+        matches!(res.status, AnchorStatus::Anchored),
+        "moved but intact ⇒ anchored, got {:?}",
         res.status
     );
     // `fn target` now begins at line 7 in v2.
@@ -407,4 +409,74 @@ fn a_relaxed_structural_hit_does_not_witness_a_moved_fuzzy_onto_a_same_named_sib
         res.range,
     );
     assert_eq!(res.range, None, "an orphan has no resolved range");
+}
+
+/// A region split by an edit: the construct's first line changed and new
+/// lines sit between it and the body. Fuzzy aligns with the body remnant
+/// (two of three lines), structural still names the construct. A note
+/// anchors to the construct, and the verdict must still say the code changed.
+#[test]
+fn a_split_region_follows_its_construct_not_the_body_remnant() {
+    let v1 = file(&[
+        "fn target() {",
+        "    first_step();",
+        "    second_step();",
+        "}",
+    ]);
+    let bundle = bundle_for(&v1, LineRange::new(1, 3).unwrap());
+
+    let v2 = file(&[
+        "fn target(limit: u32) {",
+        "    if limit == 0 {",
+        "        return;",
+        "    }",
+        "    first_step();",
+        "    second_step();",
+        "}",
+    ]);
+    let res = resolve(&bundle, &v2, None);
+
+    let r = res.range.expect("located, not orphaned");
+    assert_eq!(
+        r.start(),
+        1,
+        "the note stays on `fn target`, not on the body lines that slid down: {r:?}"
+    );
+    assert!(
+        matches!(res.status, AnchorStatus::Drifted { .. }),
+        "the signature changed, so the reader must still be told: {:?}",
+        res.status
+    );
+}
+
+/// The body remnant moved into a *different* construct. The note stays with
+/// the construct it was written about, even though its lines now live
+/// elsewhere in the file.
+#[test]
+fn a_body_extracted_into_another_function_leaves_the_note_on_the_original() {
+    let v1 = file(&[
+        "fn target() {",
+        "    let saved = load();",
+        "    let rungs = build(saved);",
+        "    finish(rungs);",
+        "}",
+    ]);
+    let bundle = bundle_for(&v1, LineRange::new(1, 3).unwrap());
+
+    let v2 = file(&[
+        "fn target() {",
+        "    target_with(Mode::Normal)",
+        "}",
+        "",
+        "fn target_with(mode: Mode) {",
+        "    let saved = load();",
+        "    let rungs = build(saved);",
+        "    finish(rungs);",
+        "}",
+    ]);
+    let res = resolve(&bundle, &v2, None);
+
+    let r = res.range.expect("located, not orphaned");
+    assert_eq!(r.start(), 1, "stays on `fn target`: {r:?}");
+    assert!(matches!(res.status, AnchorStatus::Drifted { .. }));
 }

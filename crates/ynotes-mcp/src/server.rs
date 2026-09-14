@@ -36,7 +36,7 @@ impl YnotesServer {
     }
     /// See spec §5.1, description text verbatim from the design doc.
     #[tool(
-        description = "Return the context notes overlapping a file or line region. Requires root: the absolute repository path. Call before editing or reviewing code you did not write this session - code that looks wrong may have a note explaining why it is deliberate. Statuses: anchored (region intact, not proof the claim is true), drifted (region moved or changed - verify against current code), orphaned (region gone - historical only). Notes follow file renames. Returns {\"store\":\"absent\"} when the repo has no note store. Use count: true to cheaply check whether context exists before pulling bodies.",
+        description = "Return the context notes overlapping a file or line region. Requires root: the absolute repository path. Call before editing or reviewing code you did not write this session - code that looks wrong may have a note explaining why it is deliberate. Statuses: anchored (region intact, possibly moved; not proof the claim is true), drifted (region content changed - verify against current code), orphaned (region gone - historical only). Notes follow file renames. Returns {\"store\":\"absent\"} when the repo has no note store. Use count: true to cheaply check whether context exists before pulling bodies.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = Arc::clone(&crate::output_schema::RECALL)
     )]

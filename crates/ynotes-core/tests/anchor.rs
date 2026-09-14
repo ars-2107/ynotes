@@ -32,7 +32,8 @@ fn quote_rung_relocates_a_region_that_moved_down() {
     let res = resolve(&bundle, &v2, None);
 
     assert_eq!(res.range, Some(LineRange::new(4, 5).unwrap()));
-    assert!(matches!(res.status, AnchorStatus::Drifted { .. }));
+    // Exact text relocated intact: anchored at the new lines, not stale.
+    assert!(matches!(res.status, AnchorStatus::Anchored));
 }
 
 /// Reordering a block changes both sides of its saved context, but not the
@@ -70,10 +71,9 @@ fn capture_unique_exact_quote_survives_reordering_with_new_neighbours() {
     let resolution = resolve(&bundle, &v2, None);
 
     assert_eq!(resolution.range, Some(LineRange::new(5, 7).unwrap()));
-    assert!(matches!(
-        resolution.status,
-        AnchorStatus::Drifted { from } if from == saved
-    ));
+    // Byte-identical text that only moved still matches its review basis, so
+    // it is anchored; the move is visible through the range, not the status.
+    assert_eq!(resolution.status, AnchorStatus::Anchored);
 }
 
 /// An exact line that was deleted must not jump to a distant identical line
