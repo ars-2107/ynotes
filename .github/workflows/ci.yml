@@ -72,6 +72,18 @@ jobs:
         with:
           tool: nextest
       - run: cargo nextest run --all-features
+        env:
+          # A test that has failed on CI without reproducing locally copies its
+          # repository here on failure; the step below ships it with the run.
+          YNOTES_TEST_ARTIFACT_DIR: ${{ runner.temp }}/ynotes-test-artifacts
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure()
+        with:
+          name: test-artifacts-${{ matrix.os }}
+          path: ${{ runner.temp }}/ynotes-test-artifacts
+          if-no-files-found: ignore
+          # The evidence is the `.git` and `.ynotes` trees.
+          include-hidden-files: true
       # nextest does not run doctests; cover them explicitly.
       - run: cargo test --all-features --doc
 
