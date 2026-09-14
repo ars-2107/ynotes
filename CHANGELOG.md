@@ -14,6 +14,11 @@
   was; `drifted` now means the content changed. `stale` follows `status`, so
   a pure move no longer asks the reader to re-verify unchanged code. The text
   renderer shows `anchored was A:B` for a moved region.
+- A note anchors to its construct, not to its lines. When an edit separates
+  a construct's first line from the rest of a noted region, the note now
+  stays on the construct the structural rung still names, reported
+  `drifted`, instead of following the body lines to wherever they moved,
+  even into another function.
 
 ## [0.1.0]
 

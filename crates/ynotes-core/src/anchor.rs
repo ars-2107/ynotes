@@ -179,7 +179,7 @@ const STRUCTURAL_INTACT: u8 = 95;
 /// `touched` transport (70) carried a *replaced* range onto its change point,
 /// git's own low-confidence signal, and is no evidence the region is still
 /// there. Only a git witness at or above this bar may corroborate a moved
-/// fuzzy match in [`reconcile`] step 2. Below it, git echoes a line number
+/// fuzzy match in [`reconcile`] step 3. Below it, git echoes a line number
 /// without proving content, exactly the "carries a deleted range onto its
 /// deletion point" case the module doctrine says must never decide a verdict.
 const GIT_WITNESS_MIN: u8 = 90;
@@ -193,8 +193,16 @@ const GIT_WITNESS_MIN: u8 = 90;
 /// separates the two cleanly. Only an exact-chain hit is independent evidence
 /// the *noted* construct is at fuzzy's location; a lower structural hit merely
 /// found a namesake elsewhere and must not witness a moved fuzzy match in
-/// [`reconcile`] step 2, the structural twin of the touched-git case.
+/// [`reconcile`] step 3, the structural twin of the touched-git case.
 const STRUCTURAL_WITNESS_MIN: u8 = 79;
+
+/// Fuzzy score below which a hit is *marginal*: it aligned only a strict
+/// majority of the saved lines (two of three lines score 54, three of four
+/// score 61). A marginal hit that disagrees with a witness-grade structural
+/// hit yields to it in [`reconcile`] step 2. Set from the two replayed
+/// histories rather than derived; revisit if a corpus shows a marginal fuzzy
+/// hit that should have beaten structural.
+const FUZZY_MARGINAL: u8 = 60;
 
 /// The false-positive bar a resolution runs under.
 ///
@@ -807,7 +815,7 @@ fn rung_hit(rungs: &[RungOutcome], want: Rung) -> Option<(LineRange, u8)> {
 
 /// Combines the rung outcomes into one verdict.
 ///
-/// A decision procedure, not a weighted sum. Three steps:
+/// A decision procedure, not a weighted sum. Four steps:
 ///
 /// 1. **No content evidence ⇒ orphaned.** No content rung hit (no `quote`,
 ///    no `fuzzy`) and no intact `structural` fingerprint means the region's
@@ -815,7 +823,12 @@ fn rung_hit(rungs: &[RungOutcome], want: Rung) -> Option<(LineRange, u8)> {
 ///    onto its deletion point and `position` can clamp into a now-shorter
 ///    file, so they may echo a line number without proving anything about
 ///    content. Surfaced with its last known position, never dropped.
-/// 2. **Fuzzy moved without an independent witness ⇒ orphaned.** Fuzzy's
+/// 2. **A split region follows its construct.** A marginal fuzzy hit (a
+///    strict majority of the saved lines) that does not overlap a
+///    witness-grade `structural` hit is discarded: the note anchors to the
+///    construct `structural` still names, not to the lines that slid away
+///    from it. Located, `drifted`.
+/// 3. **Fuzzy moved without an independent witness ⇒ orphaned.** Fuzzy's
 ///    LCS will happily land on a same-shaped sibling, a second
 ///    `function f(user) { … return signJwt(…); }`, so a fuzzy-only hit
 ///    that *moved* from the saved range demands corroboration from a rung
@@ -835,7 +848,7 @@ fn rung_hit(rungs: &[RungOutcome], want: Rung) -> Option<(LineRange, u8)> {
 ///    the same lines.
 ///    `position`, by contrast, *is* the saved range; treating its overlap
 ///    with fuzzy as corroboration is circular, so it is excluded.
-/// 3. **Located ⇒ anchored or drifted.** The range is taken from the most
+/// 4. **Located ⇒ anchored or drifted.** The range is taken from the most
 ///    authoritative content rung, exact `quote`, else `fuzzy`, else
 ///    `structural`. An exact quote at `QUOTE_EXACT`, or an identical
 ///    structural fingerprint, is `anchored` wherever it now sits; anything
@@ -874,7 +887,28 @@ fn reconcile(saved: LineRange, rungs: Vec<RungOutcome>, mode: ResolveMode) -> Re
         };
     }
 
-    // Step 2, fuzzy as the sole evidence. Trust it iff it stayed at the
+    // Step 2, the split region: a note anchors to a construct, not to its
+    // lines. A fuzzy hit just over its acceptance bar (a strict majority of
+    // the saved lines) that does not overlap a witness-grade structural hit
+    // is the signature of an edit that separated a construct's first line
+    // from the rest of the region: fuzzy, and git's line transport with it,
+    // follow the body remnant wherever it went, structural still names the
+    // construct in its original scope. Every wrong placement in two replayed
+    // histories (this repository and a JavaScript service, three months
+    // each) had this shape. Follow the construct. The verdict stays
+    // `drifted`, so the reader is still told the code changed, and step 1
+    // above already required the remnant to exist, so this never rescues a
+    // deleted region through its container (the 2026-05 false anchors).
+    let fuzzy = match (fuzzy, structural) {
+        (Some((fr, fs)), Some((sr, ss)))
+            if fs < FUZZY_MARGINAL && ss >= STRUCTURAL_WITNESS_MIN && !fr.overlaps(sr) =>
+        {
+            None
+        }
+        _ => fuzzy,
+    };
+
+    // Step 3, fuzzy as the sole evidence. Trust it iff it stayed at the
     // saved range exactly, or another rung independently agrees on its
     // location. See the procedure comment above for why position is not a
     // witness here.
