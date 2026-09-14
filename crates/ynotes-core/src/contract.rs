@@ -105,9 +105,10 @@ pub struct MalformedView {
 pub struct CountView {
     /// Total notes tallied, equals `anchored + drifted + orphaned`.
     pub total: u32,
-    /// Notes whose code was found present and intact at the saved position.
+    /// Notes whose code was found present and intact, at the saved position
+    /// or moved within the file.
     pub anchored: u32,
-    /// Notes found, but moved and/or edited since they were written.
+    /// Notes found, but edited since they were written.
     pub drifted: u32,
     /// Notes no content rung could locate, surfaced anyway (invariant #4).
     pub orphaned: u32,

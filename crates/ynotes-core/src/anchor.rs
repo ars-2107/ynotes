@@ -899,14 +899,12 @@ fn reconcile(saved: LineRange, rungs: Vec<RungOutcome>, mode: ResolveMode) -> Re
     // `drifted`, so the reader is still told the code changed, and step 1
     // above already required the remnant to exist, so this never rescues a
     // deleted region through its container (the 2026-05 false anchors).
-    let fuzzy = match (fuzzy, structural) {
+    let split = matches!(
+        (fuzzy, structural),
         (Some((fr, fs)), Some((sr, ss)))
-            if fs < FUZZY_MARGINAL && ss >= STRUCTURAL_WITNESS_MIN && !fr.overlaps(sr) =>
-        {
-            None
-        }
-        _ => fuzzy,
-    };
+            if fs < FUZZY_MARGINAL && ss >= STRUCTURAL_WITNESS_MIN && !fr.overlaps(sr)
+    );
+    let fuzzy = if split { None } else { fuzzy };
 
     // Step 3, fuzzy as the sole evidence. Trust it iff it stayed at the
     // saved range exactly, or another rung independently agrees on its
@@ -953,7 +951,11 @@ fn reconcile(saved: LineRange, rungs: Vec<RungOutcome>, mode: ResolveMode) -> Re
     // that did not change. Views report the move through `previous_range`.
     // Measured on three months of this repository's own history, moves
     // outnumbered edits three to one among located notes.
-    let intact = matches!(quote, Some((_, s)) if s >= QUOTE_EXACT) || structural_intact;
+    //
+    // A split region (step 2) is never intact: its lines demonstrably left
+    // the construct, whatever the construct's own fingerprint says, so the
+    // reader is always told the code changed.
+    let intact = !split && (matches!(quote, Some((_, s)) if s >= QUOTE_EXACT) || structural_intact);
     let status = if intact {
         AnchorStatus::Anchored
     } else {

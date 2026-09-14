@@ -418,6 +418,63 @@ fn an_in_place_drift_does_not_print_a_redundant_was_clause() {
         .stdout(predicate::str::contains("was").not());
 }
 
+#[test]
+fn an_intact_region_that_moved_is_anchored_and_reports_where_it_was() {
+    // Lines inserted above a region move it without touching its text. The
+    // note is not stale, so it reads `anchored`, but the move is still
+    // information: the text tag says `was A:B` and the JSON view carries
+    // `previous_range`, both against the new resolved range.
+    let dir = tempfile::tempdir().expect("tempdir");
+    ynotes()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    let file = dir.path().join("notes.txt");
+    std::fs::write(
+        &file,
+        "alpha keyword one\nbeta keyword two\ngamma keyword three\n",
+    )
+    .unwrap();
+    ynotes()
+        .current_dir(dir.path())
+        .args(["save", "notes.txt", "1:3", "-m", "the three keywords"])
+        .assert()
+        .success();
+
+    std::fs::write(
+        &file,
+        "preamble line\nanother preamble line\n\
+         alpha keyword one\nbeta keyword two\ngamma keyword three\n",
+    )
+    .unwrap();
+
+    ynotes()
+        .current_dir(dir.path())
+        .args(["query", "notes.txt", "4"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3:5  [anchored was 1:3]"))
+        .stdout(predicate::str::contains("drifted").not());
+
+    let json = ynotes()
+        .current_dir(dir.path())
+        .args(["query", "notes.txt", "4", "--json"])
+        .assert()
+        .success();
+    let json: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    let note = &json["data"]["notes"][0];
+    assert_eq!(note["status"], "anchored");
+    assert_eq!(note["stale"], false);
+    assert_eq!(note["resolved_range"], serde_json::json!([3, 5]));
+    assert_eq!(
+        note["previous_range"],
+        serde_json::json!([1, 3]),
+        "an anchored note that moved reports its saved range"
+    );
+}
+
 /// A symlink whose *path* lives inside the work tree but whose *target* points
 /// outside (e.g. `inside.lnk -> /etc/passwd`) must be refused at save. The
 /// lexical `relativize` cannot catch this, its job is to work even for files
