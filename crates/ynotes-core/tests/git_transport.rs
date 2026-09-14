@@ -115,7 +115,8 @@ fn schema_v1_note_recovers_capture_uniqueness_from_its_git_baseline() {
     let resolution = resolve(&bundle, &SourceFile::read(&file).unwrap(), Some(&ctx));
 
     assert_eq!(resolution.range, Some(LineRange::new(5, 7).unwrap()));
-    assert!(matches!(resolution.status, AnchorStatus::Drifted { .. }));
+    // Moved intact ⇒ anchored; the git baseline only helped locate it.
+    assert!(matches!(resolution.status, AnchorStatus::Anchored));
     assert!(resolution.rungs.iter().any(|outcome| {
         outcome.rung == Rung::Quote
             && matches!(

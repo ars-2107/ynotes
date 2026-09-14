@@ -7,8 +7,8 @@
 pub(crate) const INSTRUCTIONS: &str = "\
 ynotes stores notes anchored to code regions (file + line range), \
 committed to the repo. Notes re-anchor as code \
-evolves and report honest status: anchored (region intact, not proof the claim is true), drifted (region moved \
-or changed - verify the note against the current code), orphaned (region \
+evolves and report honest status: anchored (region intact, possibly moved; not proof the claim is true), \
+drifted (region content changed - verify the note against the current code), orphaned (region \
 gone - historical context only).
 
 PROTOCOL:

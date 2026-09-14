@@ -570,7 +570,7 @@ expression: tools
               "drifted": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Notes located but moved or edited."
+                "description": "Notes located but edited."
               },
               "orphaned": {
                 "type": "integer",
@@ -700,7 +700,7 @@ expression: tools
                   "drifted",
                   "orphaned"
                 ],
-                "description": "anchored: region located and intact against its review basis. drifted: located, but moved or differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
+                "description": "anchored: region located and intact against its review basis, possibly at a new position. drifted: located, but its content differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
               },
               "stale": {
                 "type": "boolean",
@@ -719,7 +719,7 @@ expression: tools
               },
               "previous_range": {
                 "$ref": "#/$defs/lineRange",
-                "description": "Present only for a drifted or orphaned note: the range it occupied before it moved or was lost."
+                "description": "Present when the region is no longer at its saved range: on an anchored or drifted note that moved, and on an orphaned note (its last known range). Absent when the note resolves where it was saved."
               },
               "relocated_from": {
                 "type": "string",
@@ -1257,7 +1257,7 @@ expression: tools
               "drifted": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Notes located but moved or edited."
+                "description": "Notes located but edited."
               },
               "orphaned": {
                 "type": "integer",
@@ -1412,7 +1412,7 @@ expression: tools
                   "drifted",
                   "orphaned"
                 ],
-                "description": "anchored: region located and intact against its review basis. drifted: located, but moved or differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
+                "description": "anchored: region located and intact against its review basis, possibly at a new position. drifted: located, but its content differs from its review basis. orphaned: could not be identified. None of these statuses establishes that the note's claims are true."
               },
               "stale": {
                 "type": "boolean",
@@ -1431,7 +1431,7 @@ expression: tools
               },
               "previous_range": {
                 "$ref": "#/$defs/lineRange",
-                "description": "Present only for a drifted or orphaned note: the range it occupied before it moved or was lost."
+                "description": "Present when the region is no longer at its saved range: on an anchored or drifted note that moved, and on an orphaned note (its last known range). Absent when the note resolves where it was saved."
               },
               "relocated_from": {
                 "type": "string",

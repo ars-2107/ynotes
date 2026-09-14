@@ -56,7 +56,7 @@ code, commit messages, task progress, or session history.
 | Status | Meaning | Action |
 | --- | --- | --- |
 | `anchored` | Region located and intact | Check claims relevant to your task. |
-| `drifted` | Region located but moved or changed | Read current code, then review or update the note. |
+| `drifted` | Region located but its content changed | Read current code, then review or update the note. |
 | `orphaned` | Region cannot be identified | Inspect as historical context; do not assume the code is gone. |
 
 `stale` is false only for `anchored`. No status proves a note true.

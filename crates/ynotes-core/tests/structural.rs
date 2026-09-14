@@ -56,9 +56,11 @@ fn structural_survives_reformat_and_move() {
     let res = resolve(&bundle, &v2, None);
 
     let r = res.range.expect("relocated, not orphaned");
+    // Reformatted and moved, but the construct's fingerprint is identical:
+    // the note is anchored at its new position, not stale.
     assert!(
-        matches!(res.status, AnchorStatus::Drifted { .. }),
-        "moved ⇒ drifted, got {:?}",
+        matches!(res.status, AnchorStatus::Anchored),
+        "moved but intact ⇒ anchored, got {:?}",
         res.status
     );
     // `fn target` now begins at line 7 in v2.

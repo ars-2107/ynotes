@@ -8,7 +8,7 @@
 //! range, so treating it as independent evidence would be circular.
 //!
 //! The result is [`Anchored`](AnchorStatus::Anchored) when located and intact,
-//! [`Drifted`](AnchorStatus::Drifted) when located but moved or changed, or
+//! [`Drifted`](AnchorStatus::Drifted) when located but its content changed, or
 //! [`Orphaned`](AnchorStatus::Orphaned) when identity cannot be established.
 //! Per-rung scores are diagnostics, not a combined confidence score.
 
@@ -65,11 +65,12 @@ pub struct RungOutcome {
 /// The resolved status of a note's anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnchorStatus {
-    /// A content rung found the region's code present and intact, at the
-    /// position the note was saved at.
+    /// A content rung found the region's code present and intact. It may
+    /// have moved within the file; the resolved range says where it is now
+    /// and the note's saved range says where it was.
     Anchored,
-    /// The region was found but it moved and/or its contents changed since
-    /// the note was written.
+    /// The region was found but its contents changed since the note was
+    /// written.
     Drifted {
         /// Where the region was when the note was saved.
         from: LineRange,
@@ -837,7 +838,7 @@ fn rung_hit(rungs: &[RungOutcome], want: Rung) -> Option<(LineRange, u8)> {
 /// 3. **Located ⇒ anchored or drifted.** The range is taken from the most
 ///    authoritative content rung, exact `quote`, else `fuzzy`, else
 ///    `structural`. An exact quote at `QUOTE_EXACT`, or an identical
-///    structural fingerprint, at the saved position is `anchored`; anything
+///    structural fingerprint, is `anchored` wherever it now sits; anything
 ///    else located is `drifted`.
 fn reconcile(saved: LineRange, rungs: Vec<RungOutcome>, mode: ResolveMode) -> Resolution {
     let raw_quote = rung_hit(&rungs, Rung::Quote);
@@ -909,12 +910,17 @@ fn reconcile(saved: LineRange, rungs: Vec<RungOutcome>, mode: ResolveMode) -> Re
     // beats an approximate match beats a structural recognition.
     let range = quote.or(fuzzy).or(structural).map_or(saved, |(r, _)| r);
 
-    // `anchored` = located, intact, and unmoved. Intact means the exact text
-    // is here (`quote` at its confident score) or the structural fingerprint
-    // is identical; an ambiguous quote, a fuzzy match, or a degraded
-    // structural hit all mean the contents changed ⇒ drifted.
+    // `anchored` = located and intact. Intact means the exact text is here
+    // (`quote` at its confident score) or the structural fingerprint is
+    // identical; an ambiguous quote, a fuzzy match, or a degraded structural
+    // hit all mean the contents changed ⇒ drifted. Position is not part of
+    // the verdict: a region that only moved still matches its review basis
+    // byte for byte, and flagging it stale sends the reader to re-check code
+    // that did not change. Views report the move through `previous_range`.
+    // Measured on three months of this repository's own history, moves
+    // outnumbered edits three to one among located notes.
     let intact = matches!(quote, Some((_, s)) if s >= QUOTE_EXACT) || structural_intact;
-    let status = if intact && range == saved {
+    let status = if intact {
         AnchorStatus::Anchored
     } else {
         AnchorStatus::Drifted { from: saved }

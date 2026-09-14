@@ -154,8 +154,14 @@ pub fn malformed_view(m: &MalformedNote) -> MalformedView {
 /// Maps a resolved note to its view; includes the rung vector if `explain`.
 #[must_use]
 pub fn note_view(rn: &ResolvedNote, explain: bool) -> NoteView {
+    let saved = rn.note.bundle.position.range;
     let (status, previous) = match rn.resolution.status {
-        AnchorStatus::Anchored => ("anchored", None),
+        // An intact region that moved is still anchored; the move is reported,
+        // not treated as staleness.
+        AnchorStatus::Anchored => (
+            "anchored",
+            (rn.resolution.range != Some(saved)).then_some([saved.start(), saved.end()]),
+        ),
         AnchorStatus::Drifted { from } => ("drifted", Some([from.start(), from.end()])),
         AnchorStatus::Orphaned { last_known } => {
             ("orphaned", Some([last_known.start(), last_known.end()]))

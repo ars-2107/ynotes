@@ -41,8 +41,8 @@ branches on:
   `{"success": false, "v": 1, "error": "…", "type": "usage"|"engine"|"io"|"render"}`.
 - **note** (in `query`/`list`/`show` data), `id`, `target`, `scope`,
   `resolved_range` (`[start, end]`, or `null` for an orphan, there is no
-  `range` field on a note), `previous_range` (present only when the region
-  moved, so on a `drifted` or `orphaned` note), `body`, `status`
+  `range` field on a note), `previous_range` (present when the region is not
+  at its saved range: a moved `anchored` or `drifted` note, or an `orphaned` one), `body`, `status`
   (`anchored`|`drifted`|`orphaned`), `stale` (boolean, `false` only for
   `anchored`), optional `relocated_from` and `relocated_to` (the stored and
   current sides of a pending rename), and `rungs` under `--explain`.
