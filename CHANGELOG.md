@@ -6,6 +6,9 @@
   from the note's baseline, and compose multi-hop moves, instead of one diff
   across the whole span. A file edited heavily and then renamed no longer
   reads as orphaned in those commands while `query` on the new path finds it.
+- The session hook adds one line naming how many notes are drifted or
+  orphaned and pointing at `ynotes reanchor --dry-run`, for stores of up to
+  500 notes; larger stores keep the file list only.
 
 ## [0.1.0]
 
