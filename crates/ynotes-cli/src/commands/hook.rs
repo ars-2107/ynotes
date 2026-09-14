@@ -192,4 +192,58 @@ mod tests {
             "reports stale notes and names the routine that heals them: {block}"
         );
     }
+
+    /// Saves one note on `src/auth.rs` with the file present on disk, so the
+    /// note resolves `anchored`.
+    fn store_with_an_anchored_note(root: &std::path::Path) -> Store {
+        let store = Store::init(root).unwrap();
+        let lines = ["fn a() {", "    b();", "}"];
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/auth.rs"), lines.join("\n") + "\n").unwrap();
+        let file = ynotes::SourceFile::from_lines(
+            "src/auth.rs".into(),
+            lines.iter().map(|l| (*l).to_owned()).collect(),
+        );
+        let range = ynotes::LineRange::new(1, 2).unwrap();
+        let bundle = ynotes::SelectorBundle::capture(&file, range).unwrap();
+        let note = ynotes::Note::new(
+            "src/auth.rs".to_owned(),
+            ynotes::Scope::Range,
+            bundle,
+            "the reason".to_owned(),
+        )
+        .unwrap();
+        store.save(&note).unwrap();
+        store
+    }
+
+    /// A store whose notes all still resolve has nothing to maintain, so the
+    /// block must not mention `reanchor`: the line is a signal, not boilerplate.
+    #[test]
+    fn a_store_with_only_anchored_notes_does_not_mention_reanchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_an_anchored_note(dir.path());
+        assert_eq!(stale_counts(&store, 1), Some((0, 0)));
+
+        let event = format!(r#"{{"cwd": {:?}}}"#, dir.path().display().to_string());
+        let block = session_start_block(&event).expect("a populated store is announced");
+        assert!(
+            block.contains("src/auth.rs"),
+            "still names the annotated file"
+        );
+        assert!(
+            !block.contains("drifted") && !block.contains("reanchor"),
+            "no maintenance line when nothing is stale: {block}"
+        );
+    }
+
+    /// Above the resolution bound the hook must not pay for a full resolve,
+    /// so it reports no counts at all rather than a partial or slow answer.
+    #[test]
+    fn a_store_above_the_bound_skips_the_stale_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_an_anchored_note(dir.path());
+        assert_eq!(stale_counts(&store, MAX_NOTES_RESOLVED), Some((0, 0)));
+        assert_eq!(stale_counts(&store, MAX_NOTES_RESOLVED + 1), None);
+    }
 }
